@@ -1,0 +1,166 @@
+//! Finding the tmux client and running the prompt in a popup on it.
+
+use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use crate::sys;
+use crate::ui::{self, Layout, Outcome, Request, Secret, Style};
+
+/// How long the popup gets to come up before we fall back.
+const POPUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn tmux(args: &[&str]) -> Option<String> {
+    let out = Command::new("tmux")
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+pub struct Client {
+    pub tty: String,
+    pub width: usize,
+}
+
+/// Whether `tty` belongs to tmux: one of its panes, or a terminal a client
+/// is attached from.
+pub fn owns_tty(tty: &str) -> bool {
+    let panes = tmux(&["list-panes", "-a", "-F", "#{pane_tty}"]);
+    let clients = tmux(&["list-clients", "-F", "#{client_tty}"]);
+    [panes, clients].into_iter().flatten().any(|out| out.lines().any(|l| l == tty))
+}
+
+/// The most recently active tmux client.
+///
+/// That's the client you just typed the gpg/ssh/git command into, so the
+/// popup lands on the window you're looking at. A pane's tty doesn't say
+/// which client is looking at it, and several can be.
+pub fn find_client() -> Option<Client> {
+    tmux(&["list-clients", "-F", "#{client_activity}\t#{client_tty}\t#{client_width}"])?
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            let activity: u64 = f.next()?.parse().ok()?;
+            let tty = f.next()?.to_string();
+            let width = f.next()?.parse().ok()?;
+            Some((activity, Client { tty, width }))
+        })
+        .max_by_key(|(activity, _)| *activity)
+        .map(|(_, c)| c)
+}
+
+/// A global tmux user option, e.g. `@pinentry-style`.
+pub fn option(name: &str) -> Option<String> {
+    let v = tmux(&["show-options", "-gqv", name])?;
+    let v = v.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+fn shell_quote(s: &[u8]) -> String {
+    format!("'{}'", String::from_utf8_lossy(s).replace('\'', r"'\''"))
+}
+
+/// Asks in a popup on `client`. None means the popup couldn't be shown.
+pub fn prompt(client: &Client, req: &Request, lay: &Layout) -> io::Result<Option<Outcome>> {
+    let dir = sys::mkdtemp()?;
+    let outcome = popup(client, req, lay, &dir);
+    let _ = fs::remove_dir_all(&dir);
+    outcome
+}
+
+fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result<Option<Outcome>> {
+    fs::write(dir.join("req"), req.encode())?;
+    sys::mkfifo(&dir.join("resp"))?;
+    sys::mkfifo(&dir.join("ctl"))?;
+    // Read-write so the opens don't block. The popup gives up once ctl has
+    // no writers left: when we return, or if this process dies.
+    let rw = || OpenOptions::new().read(true).write(true).clone();
+    let mut resp = rw().open(dir.join("resp"))?;
+    let ctl = rw().open(dir.join("ctl"))?;
+    sys::set_nonblocking(resp.as_raw_fd(), true)?;
+
+    let (x, y, w) = match req.style {
+        Style::Bar => ("0", "S", client.width),
+        Style::Box | Style::Line => ("C", "C", lay.width + 4),
+    };
+    let exe = env::current_exe()?;
+    let cmd = [exe.as_os_str().as_bytes(), b"--ui", dir.as_os_str().as_bytes()].map(shell_quote);
+    let mut popup = Command::new("tmux")
+        .args(["display-popup", "-E", "-c", &client.tty, "-x", x, "-y", y])
+        .args(["-w", &w.to_string(), "-h", &(lay.rows + 2).to_string(), "-T", &lay.title])
+        .arg(cmd.join(" "))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    // The popup answers "READY" once it's up, then one Outcome line.
+    let start = Instant::now();
+    let mut buf = Secret::new();
+    let mut ready = false;
+    let outcome = loop {
+        let exited = !matches!(popup.try_wait(), Ok(None));
+        if exited || sys::poll(&[resp.as_raw_fd()], Some(Duration::from_millis(100)))?[0] != 0 {
+            let mut chunk = [0; 256];
+            while let Ok(n @ 1..) = resp.read(&mut chunk) {
+                buf.0.extend_from_slice(&chunk[..n]);
+            }
+            chunk.fill(0);
+        }
+        if let Some(i) = buf.0.iter().position(|&b| b == b'\n') {
+            let line = Secret(buf.0.drain(..=i).collect());
+            if line.0 != b"READY\n" {
+                break Some(Outcome::decode(&line.0));
+            }
+            ready = true;
+            continue;
+        }
+        if exited {
+            // Closed from tmux before answering: treat it as cancel. Never
+            // came up at all (e.g. the client already has a popup): fall back.
+            break ready.then_some(Outcome::Cancel);
+        }
+        if !ready && start.elapsed() > POPUP_TIMEOUT {
+            let _ = popup.kill();
+            break None;
+        }
+    };
+    drop(ctl);
+    let _ = popup.wait();
+    Ok(outcome)
+}
+
+/// Runs inside the popup: show the prompt and send back the answer.
+pub fn ui_main(dir: &Path) -> io::Result<()> {
+    sys::ignore_interrupts();
+    // Non-blocking opens fail instead of hanging if the wrapper is gone.
+    let open = |write: bool| {
+        OpenOptions::new()
+            .read(!write)
+            .write(write)
+            .custom_flags(libc::O_NONBLOCK)
+            .clone()
+    };
+    let mut resp = open(true).open(dir.join("resp"))?;
+    let ctl = open(false).open(dir.join("ctl"))?;
+    let req = fs::read_to_string(dir.join("req"))?;
+    let req = Request::decode(&req).ok_or(io::ErrorKind::InvalidData)?;
+    // Everything's open, so the files aren't needed. Cleaning up here means
+    // the directory goes away even if the wrapper is killed.
+    let _ = fs::remove_dir_all(dir);
+    sys::set_nonblocking(resp.as_raw_fd(), false)?;
+    resp.write_all(b"READY\n")?;
+
+    let tty = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+    let outcome = ui::run(&tty, &req, Some(&ctl), false)?;
+    resp.write_all(&outcome.encode().0)
+}
