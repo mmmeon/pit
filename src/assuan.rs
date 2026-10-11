@@ -33,8 +33,8 @@ pub fn escape(data: &[u8]) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-pub fn unescape(s: &str) -> Vec<u8> {
-    let b = s.as_bytes();
+pub fn unescape(s: impl AsRef<[u8]>) -> Vec<u8> {
+    let b = s.as_ref();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
@@ -330,6 +330,15 @@ mod tests {
         all.extend_from_slice("pässwörd 漢字 🔑".as_bytes());
         let escaped = escape(&all);
         assert!(!escaped.bytes().any(|b| b < 0x20 && b != b'%'));
+        assert_eq!(unescape(&escaped), all);
+    }
+
+    #[test]
+    fn escape_into_round_trips_every_byte() {
+        let all: Vec<u8> = (0..=255).collect();
+        let mut escaped = Vec::new();
+        escape_into(&mut escaped, &all);
+        assert!(!escaped.iter().any(|&b| b < 0x20));
         assert_eq!(unescape(&escaped), all);
     }
 

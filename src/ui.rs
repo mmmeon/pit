@@ -191,7 +191,7 @@ impl Outcome {
             b"TIMEOUT" => Outcome::Timeout,
             _ => match line.strip_prefix(b"PIN ") {
                 Some(rest) if rest.len() >= 2 => Outcome::Pin {
-                    pin: Secret(unescape(&String::from_utf8_lossy(&rest[2..]))),
+                    pin: Secret(unescape(&rest[2..])),
                     repeated: rest[0] == b'1',
                 },
                 _ => Outcome::Cancel,
@@ -858,7 +858,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known bug: Outcome::decode runs the PIN through from_utf8_lossy"]
     fn outcome_keeps_non_utf8_pin_bytes() {
         // A Latin-1 terminal sends é as the single byte 0xe9.
         let secret = vec![b'p', 0xe9, b'x'];
