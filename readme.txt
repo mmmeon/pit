@@ -25,3 +25,8 @@ error
   - no tmux client and no known terminal: "No pinentry" error to gpg
   - terminal known but unopenable and no tmux client: same error
   - popup closed from tmux mid-prompt: cancelled
+
+testing
+  - cargo test: unit tests, plus the binary driven through ptys and an
+    isolated tmux server (skipped if tmux isn't installed)
+  - cargo test --test gpg_agent -- --ignored: through a real gpg-agent

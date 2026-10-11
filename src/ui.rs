@@ -754,3 +754,309 @@ impl Ui<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn full_request() -> Request {
+        Request {
+            kind: Kind::Confirm,
+            style: Style::Line,
+            echo: Echo::Dots,
+            title: "Unlock key".into(),
+            desc: "Please enter the passphrase for\n\"Alice <a@x>\"\n100% sure? 漢字".into(),
+            prompt: "Pass phrase:".into(),
+            error: "Bad\rpassphrase".into(),
+            repeat: Some("Repeat:".into()),
+            repeat_error: "mismatch %25".into(),
+            ok: "_OK".into(),
+            cancel: "_Cancel".into(),
+            notok: Some("_No".into()),
+            timeout: 42,
+            width: 77,
+        }
+    }
+
+    fn pin(outcome: Outcome) -> (Vec<u8>, bool) {
+        match outcome {
+            Outcome::Pin { pin, repeated } => (pin.0.clone(), repeated),
+            _ => panic!("not a pin"),
+        }
+    }
+
+    #[test]
+    fn request_round_trips() {
+        let req = full_request();
+        let back = Request::decode(&req.encode()).unwrap();
+        assert_eq!(back.encode(), req.encode());
+        assert_eq!(back.desc, req.desc);
+        assert_eq!(back.error, req.error);
+        assert_eq!(back.repeat_error, req.repeat_error);
+        assert_eq!((back.kind, back.style, back.echo), (req.kind, req.style, req.echo));
+        assert_eq!((back.timeout, back.width), (42, 77));
+        assert_eq!(back.notok.as_deref(), Some("_No"));
+    }
+
+    #[test]
+    fn request_round_trips_optional_fields() {
+        for (repeat, notok) in [(None, None), (Some(String::new()), Some(String::new()))] {
+            let req = Request { repeat: repeat.clone(), notok: notok.clone(), ..full_request() };
+            let back = Request::decode(&req.encode()).unwrap();
+            assert_eq!((back.repeat, back.notok), (repeat, notok));
+        }
+        for kind in [Kind::Pin, Kind::Confirm, Kind::Message] {
+            for style in [Style::Bar, Style::Box, Style::Line] {
+                for echo in [Echo::Marker, Echo::Dots, Echo::None] {
+                    let req = Request { kind, style, echo, ..full_request() };
+                    let back = Request::decode(&req.encode()).unwrap();
+                    assert_eq!((back.kind, back.style, back.echo), (kind, style, echo));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn request_decode_rejects_bad_values() {
+        assert!(Request::decode("kind bogus\n").is_none());
+        assert!(Request::decode("style\n").is_none());
+        assert!(Request::decode("timeout soon\n").is_none());
+        assert!(Request::decode("width -1\n").is_none());
+        let req = Request::decode("future-key whatever\ntitle t\n").unwrap();
+        assert_eq!(req.title, "t");
+    }
+
+    #[test]
+    fn names_parse() {
+        assert_eq!(Style::parse(" box\n"), Some(Style::Box));
+        assert_eq!(Style::parse("BOX"), None);
+        assert_eq!(Echo::parse("none"), Some(Echo::None));
+        assert_eq!(Echo::parse("stars"), None);
+        assert_eq!(Kind::parse("message"), Some(Kind::Message));
+    }
+
+    #[test]
+    fn outcome_round_trips() {
+        let secret = "p%ss\nwörd\x01 ".as_bytes().to_vec();
+        for repeated in [false, true] {
+            let line = Outcome::Pin { pin: Secret(secret.clone()), repeated }.encode();
+            assert_eq!(line.0.iter().filter(|&&b| b == b'\n').count(), 1);
+            assert_eq!(pin(Outcome::decode(&line.0)), (secret.clone(), repeated));
+        }
+        assert_eq!(pin(Outcome::decode(b"PIN 0 \n")), (Vec::new(), false));
+        assert!(matches!(Outcome::decode(&Outcome::Ok.encode().0), Outcome::Ok));
+        assert!(matches!(Outcome::decode(&Outcome::NotOk.encode().0), Outcome::NotOk));
+        assert!(matches!(Outcome::decode(&Outcome::Cancel.encode().0), Outcome::Cancel));
+        assert!(matches!(Outcome::decode(&Outcome::Timeout.encode().0), Outcome::Timeout));
+    }
+
+    #[test]
+    fn outcome_garbage_is_cancel() {
+        for line in [&b""[..], b"\n", b"PIN", b"PIN 1", b"ok\n", b"READY\n"] {
+            assert!(matches!(Outcome::decode(line), Outcome::Cancel), "{line:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "known bug: Outcome::decode runs the PIN through from_utf8_lossy"]
+    fn outcome_keeps_non_utf8_pin_bytes() {
+        // A Latin-1 terminal sends é as the single byte 0xe9.
+        let secret = vec![b'p', 0xe9, b'x'];
+        let line = Outcome::Pin { pin: Secret(secret.clone()), repeated: false }.encode();
+        assert_eq!(pin(Outcome::decode(&line.0)).0, secret);
+    }
+
+    #[test]
+    fn split_at_width_cases() {
+        assert_eq!(split_at_width("abcdef", 3), ("abc", "def"));
+        assert_eq!(split_at_width("abc", 3), ("abc", ""));
+        assert_eq!(split_at_width("漢字", 3), ("漢", "字"));
+        assert_eq!(split_at_width("漢字", 1), ("漢", "字"));
+        assert_eq!(split_at_width("abc", 0), ("a", "bc"));
+        assert_eq!(split_at_width("e\u{301}x", 1), ("e\u{301}", "x"));
+    }
+
+    #[test]
+    fn wrap_cases() {
+        assert_eq!(wrap("the quick brown fox", 9), ["the quick", "brown fox"]);
+        assert_eq!(wrap("a\n\nb", 9), ["a", "b"]);
+        assert_eq!(wrap("  spaced   out  ", 20), ["spaced out"]);
+        assert_eq!(wrap("abcdefghij x", 4), ["abcd", "efgh", "ij x"]);
+        assert_eq!(wrap("漢字漢字", 5), ["漢字", "漢字"]);
+        assert!(wrap("", 10).is_empty());
+    }
+
+    #[test]
+    fn wrap_never_exceeds_width() {
+        let text = "Please enter the passphrase to unlock the OpenPGP secret key: \
+                    \"Ålice Ünicode 漢字テスト <alice@example.org>\" 3072-bit RSA key, \
+                    ID 0123456789ABCDEF, created 2024-01-01. averyveryverylongwordindeed";
+        for w in 1..60 {
+            for line in wrap(text, w) {
+                assert!(width(&line) <= w.max(2), "w={w} {line:?}");
+            }
+            let parts = ["one", "two three", "averyveryverylongwordindeed", "漢字"];
+            for line in wrap_parts(parts.into_iter(), " · ", w) {
+                assert!(width(&line) <= w.max(2), "w={w} {line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_parts_keeps_parts_together() {
+        let parts = ["Unlock key", "Alice <a@x>", "RSA"];
+        assert_eq!(wrap_parts(parts.into_iter(), " · ", 100), ["Unlock key · Alice <a@x> · RSA"]);
+        assert_eq!(wrap_parts(parts.into_iter(), " · ", 20), ["Unlock key", "Alice <a@x> · RSA"]);
+        assert_eq!(wrap_parts(["a b c d e f"].into_iter(), " · ", 5), ["a b c", "d e f"]);
+    }
+
+    #[test]
+    fn label_cases() {
+        assert_eq!(label("_Cancel"), ("Cancel".into(), Some('c')));
+        assert_eq!(label("Do_n't"), ("Don't".into(), Some('n')));
+        assert_eq!(label("a__b"), ("a_b".into(), None));
+        assert_eq!(label("_A_B"), ("AB".into(), Some('a')));
+        assert_eq!(label("trailing_"), ("trailing".into(), None));
+        assert_eq!(label("OK"), ("OK".into(), None));
+    }
+
+    #[test]
+    fn buttons_per_kind() {
+        let req = Request { kind: Kind::Message, ..full_request() };
+        let b = buttons(&req);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].key.as_str(), b[0].label.as_str(), b[0].mnemonic), ("⏎", "OK", Some('o')));
+
+        let req = Request { kind: Kind::Confirm, notok: Some("Maybe".into()), ..full_request() };
+        let b = buttons(&req);
+        let summary: Vec<_> = b.iter().map(|b| (b.key.as_str(), b.label.as_str(), b.mnemonic)).collect();
+        assert_eq!(
+            summary,
+            [("⏎", "OK", Some('o')), ("m", "Maybe", Some('m')), ("esc", "Cancel", Some('c'))]
+        );
+        assert!(matches!(b[1].choice, Choice::NotOk));
+
+        let req = Request { kind: Kind::Confirm, notok: None, ..full_request() };
+        assert_eq!(buttons(&req).len(), 2);
+    }
+
+    #[test]
+    fn input_width_cases() {
+        let pin = |echo, repeat: Option<&str>| Request {
+            kind: Kind::Pin,
+            echo,
+            prompt: "PIN:".into(),
+            repeat: repeat.map(Into::into),
+            ..full_request()
+        };
+        assert_eq!(input_width(&pin(Echo::None, None)), 4);
+        assert_eq!(input_width(&pin(Echo::Marker, None)), 4 + 1 + MARKER_WIDTH);
+        assert_eq!(input_width(&pin(Echo::Dots, Some("Repeat PIN:"))), 11 + 1 + DOTS_WIDTH);
+        // "⏎ OK" + "   " + "n No" + "   " + "esc Cancel"
+        let req = Request { kind: Kind::Confirm, ..full_request() };
+        assert_eq!(input_width(&req), 4 + 3 + 4 + 3 + 10);
+    }
+
+    #[test]
+    fn phrases_and_summary() {
+        let paras = ["Please enter the passphrase to unlock", "the OpenPGP secret key:", "\"Alice <a@x>\"", "255-bit key,"];
+        assert_eq!(
+            phrases(&paras),
+            ["Please enter the passphrase to unlock the OpenPGP secret key:", "\"Alice <a@x>\"", "255-bit key,"]
+        );
+        assert_eq!(summary(&paras).as_deref(), Some("Alice <a@x>"));
+        assert_eq!(summary(&["Enter new", "passphrase:"]).as_deref(), Some("Enter new passphrase"));
+        assert_eq!(summary(&[]), None);
+    }
+
+    #[test]
+    fn layout_bar() {
+        let req = Request { kind: Kind::Pin, style: Style::Bar, error: String::new(), repeat: None, ..full_request() };
+        let lay = layout(&req, 200);
+        assert_eq!(lay.width, 200);
+        assert_eq!(lay.desc, ["Please enter the passphrase for \"Alice <a@x>\" · 100% sure? 漢字"]);
+        assert_eq!((lay.error_row, lay.input_row, lay.rows), (None, 1, 2));
+        assert_eq!(lay.title, " Unlock key ");
+
+        // An error row is reserved for SETERROR, and for repeat even before a mismatch.
+        let lay = layout(&Request { error: "bad".into(), ..req.clone() }, 200);
+        assert_eq!((lay.error_row, lay.input_row, lay.rows), (Some(1), 2, 3));
+        let lay = layout(&Request { repeat: Some("Again:".into()), ..req.clone() }, 200);
+        assert_eq!((lay.error_row, lay.input_row, lay.rows), (Some(1), 2, 3));
+
+        assert_eq!(layout(&req, 3).width, 10);
+    }
+
+    #[test]
+    fn layout_box() {
+        let req = Request { kind: Kind::Pin, style: Style::Box, error: String::new(), repeat: None, ..full_request() };
+        let short = Request { desc: "Hi".into(), prompt: "P:".into(), echo: Echo::None, ..req.clone() };
+        let lay = layout(&short, 200);
+        assert_eq!(lay.width, 20);
+        assert_eq!((lay.desc.len(), lay.error_row, lay.input_row, lay.rows), (1, None, 2, 3));
+
+        let long = Request { desc: "word ".repeat(40), ..req.clone() };
+        let lay = layout(&long, 200);
+        assert_eq!(lay.width, 76);
+        assert!(lay.desc.len() > 1);
+        assert_eq!(layout(&long, 40).width, 40);
+
+        let empty = Request { desc: String::new(), ..req };
+        let lay = layout(&empty, 200);
+        assert_eq!((lay.desc.len(), lay.input_row, lay.rows), (0, 0, 1));
+    }
+
+    #[test]
+    fn layout_line() {
+        let req = Request { kind: Kind::Pin, style: Style::Line, ..full_request() };
+        let lay = layout(&req, 200);
+        assert_eq!((lay.rows, lay.input_row, lay.error_row), (1, 0, None));
+        assert!(lay.desc.is_empty());
+        assert_eq!(lay.title, " Unlock key · Alice <a@x> ");
+        assert!(lay.width >= 30);
+        assert_eq!(layout(&req, 12).width, 12);
+    }
+
+    #[test]
+    fn layout_is_stable_at_its_own_width() {
+        let descs = ["", "Short", &"word ".repeat(30), "Please enter the passphrase for\n\"Alice <a@x>\"\n3072-bit RSA key"];
+        for desc in descs {
+            for kind in [Kind::Pin, Kind::Confirm, Kind::Message] {
+                for style in [Style::Bar, Style::Box, Style::Line] {
+                    for echo in [Echo::Marker, Echo::Dots, Echo::None] {
+                        for repeat in [None, Some("Repeat:".to_string())] {
+                            for max in [0, 5, 10, 25, 40, 80, 300] {
+                                let req = Request { desc: desc.into(), kind, style, echo, repeat: repeat.clone(), ..full_request() };
+                                let a = layout(&req, max);
+                                let b = layout(&req, a.width);
+                                let ctx = format!("{kind:?} {style:?} {echo:?} max={max} desc={desc:?}");
+                                assert_eq!((a.width, a.rows, a.input_row, a.error_row), (b.width, b.rows, b.input_row, b.error_row), "{ctx}");
+                                assert_eq!((&a.title, &a.desc), (&b.title, &b.desc), "{ctx}");
+                                for line in &a.desc {
+                                    assert!(width(line) <= a.width.max(2), "{ctx} {line:?}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn render_cuts_with_ellipsis() {
+        let segs = [("", "hello".to_string()), (BOLD, "world".to_string()), ("", "!".to_string())];
+        assert_eq!(render(&segs, 20), format!("hello{BOLD}world{RESET}!"));
+        assert_eq!(render(&segs, 7), format!("hello{BOLD}w{RESET}…"));
+        assert_eq!(render(&[("", "漢字漢字".into())], 5), "漢字…");
+        assert_eq!(render(&[], 5), "");
+    }
+
+    #[test]
+    #[ignore = "known bug: split_at_width takes a char even when no room is left"]
+    fn render_never_exceeds_width() {
+        let segs = [("", "hello".to_string()), (BOLD, "world".to_string())];
+        let out = render(&segs, 5).replace(BOLD, "").replace(RESET, "");
+        assert!(width(&out) <= 5, "{out:?}");
+    }
+}

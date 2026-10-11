@@ -164,3 +164,25 @@ pub fn ui_main(dir: &Path) -> io::Result<()> {
     let outcome = ui::run(&tty, &req, Some(&ctl), false)?;
     resp.write_all(&outcome.encode().0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_cases() {
+        assert_eq!(shell_quote(b"plain"), "'plain'");
+        assert_eq!(shell_quote(b"with space"), "'with space'");
+        assert_eq!(shell_quote(b"it's"), r"'it'\''s'");
+        assert_eq!(shell_quote(b"$(x) `y` \"z\""), "'$(x) `y` \"z\"'");
+        assert_eq!(shell_quote(b""), "''");
+    }
+
+    #[test]
+    fn shell_quote_survives_sh() {
+        for s in ["it's", "a'b'c", "$HOME", "x\\y", "tab\there", "'"] {
+            let out = Command::new("sh").arg("-c").arg(format!("printf %s {}", shell_quote(s.as_bytes()))).output().unwrap();
+            assert_eq!(String::from_utf8(out.stdout).unwrap(), s);
+        }
+    }
+}

@@ -308,3 +308,204 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
     }
     Ok(Ok(()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(st: &mut State, line: &str) -> (String, Result<(), Failure>) {
+        let (cmd, arg) = line.split_once(' ').unwrap_or((line, ""));
+        let mut out = Vec::new();
+        let res = handle(st, cmd, arg, &mut out).unwrap();
+        (String::from_utf8(out).unwrap(), res)
+    }
+
+    fn ok(st: &mut State, line: &str) {
+        assert_eq!(run(st, line), (String::new(), Ok(())), "{line}");
+    }
+
+    #[test]
+    fn escape_round_trips_ascii_and_utf8() {
+        let mut all: Vec<u8> = (0..0x80).collect();
+        all.extend_from_slice("pässwörd 漢字 🔑".as_bytes());
+        let escaped = escape(&all);
+        assert!(!escaped.bytes().any(|b| b < 0x20 && b != b'%'));
+        assert_eq!(unescape(&escaped), all);
+    }
+
+    #[test]
+    fn escape_only_touches_percent_and_controls() {
+        assert_eq!(escape(b"a%b\nc\rd\x1be f~"), "a%25b%0Ac%0Dd%1Be f~");
+        assert_eq!(escape("pässwörd".as_bytes()), "pässwörd");
+    }
+
+    #[test]
+    fn unescape_keeps_malformed_escapes() {
+        assert_eq!(unescape("100%"), b"100%");
+        assert_eq!(unescape("a%4"), b"a%4");
+        assert_eq!(unescape("%zz%"), b"%zz%");
+        assert_eq!(unescape("%0a%0A%2c"), b"\n\n,");
+        assert_eq!(unescape("%%41"), b"%A");
+    }
+
+    #[test]
+    fn data_writes_nothing_for_empty_value() {
+        let mut out = Vec::new();
+        data(&mut out, b"").unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn data_splits_long_values_without_breaking_escapes() {
+        let value = vec![b'%'; 2000];
+        let mut out = Vec::new();
+        data(&mut out, &value).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() > 1);
+        let mut joined = String::new();
+        for line in &lines {
+            assert!(line.len() < 1000, "line of {} bytes", line.len());
+            let body = line.strip_prefix("D ").unwrap();
+            assert_eq!(body.len() % 3, 0, "escape split across lines");
+            joined.push_str(body);
+        }
+        assert_eq!(unescape(&joined), value);
+    }
+
+    #[test]
+    fn option_forms() {
+        let mut st = State::default();
+        st.option("ttyname=/dev/pts/3");
+        st.option("TTYTYPE xterm");
+        st.option(" default-ok =_Okay ");
+        st.option("default-cancel=Can%25cel");
+        st.option("default-prompt");
+        st.option("allow-external-password-cache");
+        assert_eq!(st.ttyname.as_deref(), Some("/dev/pts/3"));
+        assert_eq!(st.ttytype.as_deref(), Some("xterm"));
+        assert_eq!(st.default_ok.as_deref(), Some("_Okay"));
+        assert_eq!(st.default_cancel.as_deref(), Some("Can%cel"));
+        assert_eq!(st.default_prompt.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn set_commands_fill_state() {
+        let mut st = State::default();
+        for line in [
+            "SETDESC Enter%0Athe passphrase",
+            "SETPROMPT Passphrase:",
+            "SETERROR Bad passphrase",
+            "SETTITLE Unlock",
+            "SETOK _Yes",
+            "SETCANCEL _No",
+            "SETNOTOK _Never",
+            "SETREPEATERROR mismatch",
+            "SETTIMEOUT 30",
+        ] {
+            assert_eq!(run(&mut st, line), (String::new(), Ok(())));
+        }
+        assert_eq!(st.desc.as_deref(), Some("Enter\nthe passphrase"));
+        assert_eq!(st.prompt.as_deref(), Some("Passphrase:"));
+        assert_eq!(st.error.as_deref(), Some("Bad passphrase"));
+        assert_eq!(st.title.as_deref(), Some("Unlock"));
+        assert_eq!(st.ok.as_deref(), Some("_Yes"));
+        assert_eq!(st.cancel.as_deref(), Some("_No"));
+        assert_eq!(st.notok.as_deref(), Some("_Never"));
+        assert_eq!(st.repeat_error.as_deref(), Some("mismatch"));
+        assert_eq!(st.timeout, 30);
+    }
+
+    #[test]
+    fn setrepeat_and_settimeout_defaults() {
+        let mut st = State::default();
+        ok(&mut st, "SETREPEAT");
+        assert_eq!(st.repeat.as_deref(), Some("Repeat:"));
+        ok(&mut st, "SETREPEAT Again:");
+        assert_eq!(st.repeat.as_deref(), Some("Again:"));
+        ok(&mut st, "SETTIMEOUT 5");
+        ok(&mut st, "SETTIMEOUT soon");
+        assert_eq!(st.timeout, 0);
+    }
+
+    #[test]
+    fn reset_keeps_options_only() {
+        let mut st = State::default();
+        ok(&mut st, "OPTION ttyname=/dev/pts/9");
+        ok(&mut st, "OPTION ttytype=screen");
+        ok(&mut st, "OPTION default-ok=OK!");
+        ok(&mut st, "OPTION default-cancel=Nope");
+        ok(&mut st, "OPTION default-prompt=PIN?");
+        ok(&mut st, "SETDESC desc");
+        ok(&mut st, "SETPROMPT prompt");
+        ok(&mut st, "SETREPEAT");
+        ok(&mut st, "SETTIMEOUT 9");
+        assert_eq!(run(&mut st, "RESET"), (String::new(), Ok(())));
+        assert_eq!(st.ttyname.as_deref(), Some("/dev/pts/9"));
+        assert_eq!(st.ttytype.as_deref(), Some("screen"));
+        assert_eq!(st.default_ok.as_deref(), Some("OK!"));
+        assert_eq!(st.default_cancel.as_deref(), Some("Nope"));
+        assert_eq!(st.default_prompt.as_deref(), Some("PIN?"));
+        assert_eq!(st.desc, None);
+        assert_eq!(st.prompt, None);
+        assert_eq!(st.repeat, None);
+        assert_eq!(st.timeout, 0);
+    }
+
+    #[test]
+    fn getinfo() {
+        let mut st = State::default();
+        assert_eq!(run(&mut st, "GETINFO flavor"), ("D tmux\n".into(), Ok(())));
+        let version = format!("D {}\n", env!("CARGO_PKG_VERSION"));
+        assert_eq!(run(&mut st, "GETINFO version"), (version, Ok(())));
+        assert_eq!(run(&mut st, "GETINFO pid"), (format!("D {}\n", process::id()), Ok(())));
+        assert_eq!(run(&mut st, "GETINFO ttyinfo"), ("D - - -\n".into(), Ok(())));
+        ok(&mut st, "OPTION ttyname=/dev/pts/1");
+        ok(&mut st, "OPTION ttytype=xterm");
+        assert_eq!(run(&mut st, "GETINFO ttyinfo"), ("D /dev/pts/1 xterm -\n".into(), Ok(())));
+        let (out, res) = run(&mut st, "GETINFO bogus");
+        assert_eq!(out, "");
+        assert_eq!(res.unwrap_err().0, ERR_ASS_PARAMETER);
+    }
+
+    #[test]
+    fn unknown_and_ignored_commands() {
+        let mut st = State::default();
+        assert_eq!(run(&mut st, "FROBNICATE").1.unwrap_err().0, ERR_ASS_UNKNOWN_CMD);
+        for line in [
+            "SETKEYINFO n/ABCDEF",
+            "SETREPEATOK ok",
+            "SETQUALITYBAR",
+            "SETQUALITYBAR_TT tip",
+            "SETGENPIN gen",
+            "SETGENPIN_TT tip",
+            "CLEARPASSPHRASE",
+            "NOP",
+        ] {
+            assert_eq!(run(&mut st, line), (String::new(), Ok(())), "{line}");
+        }
+    }
+
+    #[test]
+    fn request_fallbacks() {
+        let mut st = State::default();
+        let req = st.request(Kind::Pin);
+        assert_eq!((req.title.as_str(), req.prompt.as_str()), ("gpg", "PIN:"));
+        assert_eq!((req.ok.as_str(), req.cancel.as_str()), ("_OK", "_Cancel"));
+        assert_eq!(req.repeat_error, "does not match - try again");
+        assert!(req.repeat.is_none() && req.notok.is_none());
+
+        st.option("default-prompt=Phrase:");
+        st.option("default-ok=Fine");
+        st.option("default-cancel=Stop");
+        let req = st.request(Kind::Confirm);
+        assert_eq!(req.kind, Kind::Confirm);
+        assert_eq!((req.prompt.as_str(), req.ok.as_str(), req.cancel.as_str()), ("Phrase:", "Fine", "Stop"));
+
+        ok(&mut st, "SETPROMPT Mine:");
+        ok(&mut st, "SETOK Yes");
+        ok(&mut st, "SETCANCEL No");
+        let req = st.request(Kind::Pin);
+        assert_eq!((req.prompt.as_str(), req.ok.as_str(), req.cancel.as_str()), ("Mine:", "Yes", "No"));
+    }
+}
