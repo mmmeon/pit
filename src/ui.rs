@@ -414,10 +414,17 @@ pub fn layout(req: &Request, max: usize) -> Layout {
 
 /// Renders styled segments, cut to `w` columns with an ellipsis.
 fn render(segs: &[(&str, String)], w: usize) -> String {
+    let cut = segs.iter().map(|(_, t)| width(t)).sum::<usize>() > w;
+    // Leave a column for the ellipsis when cutting.
+    let room = if cut { w.saturating_sub(1) } else { w };
     let (mut out, mut used) = (String::new(), 0);
     for (style, text) in segs {
-        let fits = used + width(text) <= w;
-        let text = if fits { text.as_str() } else { split_at_width(text, w.saturating_sub(used + 1)).0 };
+        let fits = used + width(text) <= room;
+        let text = match fits {
+            true => text.as_str(),
+            // split_at_width always takes a char: drop it if it doesn't fit.
+            false => Some(split_at_width(text, room - used).0).filter(|t| used + width(t) <= room).unwrap_or(""),
+        };
         out.push_str(style);
         out.push_str(text);
         if !style.is_empty() {
@@ -425,9 +432,11 @@ fn render(segs: &[(&str, String)], w: usize) -> String {
         }
         used += width(text);
         if !fits {
-            out.push('…');
             break;
         }
+    }
+    if cut {
+        out.push('…');
     }
     out
 }
@@ -1052,10 +1061,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known bug: split_at_width takes a char even when no room is left"]
     fn render_never_exceeds_width() {
         let segs = [("", "hello".to_string()), (BOLD, "world".to_string())];
-        let out = render(&segs, 5).replace(BOLD, "").replace(RESET, "");
-        assert!(width(&out) <= 5, "{out:?}");
+        assert_eq!(render(&segs, 5), "hell…");
+        assert_eq!(render(&[("", "漢字".into())], 2), "…");
+        assert_eq!(render(&[("", "a漢字".into())], 3), "a…");
+        let texts = ["hello", "漢字漢字", "e\u{301}e\u{301}", "", "x"];
+        for w in 1..14 {
+            for a in texts {
+                for b in texts {
+                    let segs = [(BOLD, a.to_string()), ("", b.to_string()), (RED, "漢".to_string())];
+                    let out = render(&segs, w).replace(BOLD, "").replace(RED, "").replace(RESET, "");
+                    assert!(width(&out) <= w, "w={w} {out:?}");
+                }
+            }
+        }
     }
 }
