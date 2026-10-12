@@ -62,11 +62,12 @@ fn bar_popup_along_the_bottom() {
     s.p.setup(&[DESC, "SETPROMPT Passphrase:", "SETTITLE Unlock"]);
     s.p.start("GETPIN");
     let screen = s.pty().wait_text("Passphrase:");
+    let (height, width) = s.pty().size();
     let (top, bottom, left, right) = popup_box(&screen);
     let rows = rows(&screen);
     assert!(rows[top].starts_with("┌─ Unlock ─"), "{}", rows[top]);
-    assert_eq!((left, right), (0, 99), "bar spans the client");
-    assert_eq!(bottom, 28, "bar sits right above the status line");
+    assert_eq!((left, right), (0, width - 1), "bar spans the client");
+    assert_eq!(bottom, height - 2, "bar sits right above the status line");
     assert_eq!(bottom - top - 1, 2, "description + input");
     assert!(rows[top + 1].contains("Please enter the passphrase for \"Alice <a@x>\""));
     assert!(rows[top + 2].contains("Passphrase: [····]"));
@@ -92,11 +93,11 @@ fn box_popup_is_centred() {
     assert!(rows[top + 1].contains("Please enter the passphrase for"));
     assert!(rows[top + 2].contains("\"Alice <a@x>\""));
     assert!(rows[top + 4].contains("PIN: [····]"));
-    let width = right - left + 1;
-    assert!(width < 100);
-    assert!(left.abs_diff(100 - 1 - right) <= 1, "not centred: {left}..{right}");
-    // Centred in the 29 rows above the status line.
-    assert!(top.abs_diff(28 - bottom) <= 1, "not centred: {top}..{bottom}");
+    let (height, width) = s.pty().size();
+    assert!(right - left + 1 < width);
+    assert!(left.abs_diff(width - 1 - right) <= 1, "not centred: {left}..{right}");
+    // Centred in the rows above the status line.
+    assert!(top.abs_diff(height - 2 - bottom) <= 1, "not centred: {top}..{bottom}");
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
     s.pty().wait_gone("PIN:");
@@ -210,7 +211,7 @@ fn outside_terminal_wins_over_attached_client() {
     let sb = Sandbox::new();
     let tmux = Tmux::start(&sb);
     let client = tmux.attach(30, 100);
-    let term = Pty::new(24, 80);
+    let term = Pty::term(24, 80);
     let mut p = Pinentry::spawn(&sb, &["--ttyname", term.path()]);
     p.start("GETPIN");
     term.wait_text("PIN:");

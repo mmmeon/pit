@@ -30,3 +30,6 @@ testing
   - cargo test: unit tests, plus the binary driven through ptys and an
     isolated tmux server (skipped if tmux isn't installed)
   - cargo test --test gpg_agent -- --ignored: through a real gpg-agent
+  - PIN_TEST_SHOW=1 cargo test -- --nocapture: print the screen at each step
+  - PIN_TEST_LIVE=1 cargo test: replay the tests on this terminal, at its
+    size, one at a time, typing slowly (PIN_TEST_SLOW=ms per key, default 120)

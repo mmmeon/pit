@@ -1,5 +1,13 @@
 //! Test harness: ptys read through a vt100 parser, the pinentry binary spoken
 //! to over Assuan, and an isolated tmux server.
+//!
+//! To watch the tests:
+//!   PIN_TEST_SHOW=1 cargo test -- --nocapture
+//!     prints a snapshot of the screen each time a test waits on it
+//!   PIN_TEST_LIVE=1 cargo test
+//!     replays every pty on this terminal as it's drawn, one test at a time,
+//!     typing slowly (PIN_TEST_SLOW=ms per key, default 120). Ptys take this
+//!     terminal's size, and its echo is off until the tests exit.
 #![allow(dead_code)]
 
 use std::env;
@@ -12,7 +20,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -36,19 +44,123 @@ macro_rules! require_tmux {
     };
 }
 
+fn flag(name: &str) -> bool {
+    env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Whether to print screen snapshots (PIN_TEST_SHOW).
+pub fn show() -> bool {
+    flag("PIN_TEST_SHOW")
+}
+
+/// This terminal's modes before live replay turned echo off.
+static SAVED: OnceLock<(libc::c_int, libc::termios)> = OnceLock::new();
+
+extern "C" fn restore_tty() {
+    if let Some((fd, t)) = SAVED.get() {
+        unsafe {
+            libc::tcflush(*fd, libc::TCIFLUSH);
+            libc::tcsetattr(*fd, libc::TCSANOW, t);
+        }
+    }
+}
+
+/// Restores the terminal on Ctrl-C too, then dies of the signal as usual.
+extern "C" fn restore_tty_and_die(sig: libc::c_int) {
+    restore_tty();
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+/// The terminal to replay ptys on (PIN_TEST_LIVE), if any.
+fn live() -> Option<&'static Mutex<File>> {
+    static TTY: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+    TTY.get_or_init(|| {
+        if !flag("PIN_TEST_LIVE") {
+            return None;
+        }
+        match File::options().read(true).write(true).open("/dev/tty") {
+            Ok(tty) => {
+                // tmux queries the terminal, and the replies arrive as input.
+                // Don't let them echo over the replay.
+                let fd = tty.as_raw_fd();
+                let mut t: libc::termios = unsafe { std::mem::zeroed() };
+                if unsafe { libc::tcgetattr(fd, &mut t) } == 0 && SAVED.set((fd, t)).is_ok() {
+                    let mut quiet = t;
+                    quiet.c_lflag &= !libc::ECHO;
+                    unsafe {
+                        libc::tcsetattr(fd, libc::TCSANOW, &quiet);
+                        libc::atexit(restore_tty);
+                        let die = restore_tty_and_die as extern "C" fn(libc::c_int) as libc::sighandler_t;
+                        libc::signal(libc::SIGINT, die);
+                        libc::signal(libc::SIGTERM, die);
+                    }
+                }
+                Some(Mutex::new(tty))
+            }
+            Err(e) => {
+                eprintln!("PIN_TEST_LIVE: can't open /dev/tty ({e}), not replaying");
+                None
+            }
+        }
+    })
+    .as_ref()
+}
+
+fn live_write(bytes: &[u8]) {
+    if let Some(tty) = live() {
+        let mut tty = tty.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = tty.write_all(bytes);
+        let _ = tty.flush();
+    }
+}
+
+/// Delay per key when replaying live.
+fn slow() -> Duration {
+    let dflt = if live().is_some() { 120 } else { 0 };
+    let ms = env::var("PIN_TEST_SLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(dflt);
+    Duration::from_millis(ms)
+}
+
+fn test_name() -> String {
+    thread::current().name().unwrap_or("?").rsplit("::").next().unwrap().to_string()
+}
+
+/// Draws `body` in a box headed with `title`.
+pub fn frame(title: &str, body: &str) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let lines: Vec<&str> = body.lines().collect();
+    let inner = lines.iter().map(|l| l.width()).max().unwrap_or(0).max(title.width() + 4);
+    let mut out = format!("┌─ {title} {}┐\n", "─".repeat(inner - title.width() - 3));
+    for l in &lines {
+        out += &format!("│{l}{}│\n", " ".repeat(inner - l.width()));
+    }
+    out + &format!("└{}┘\n", "─".repeat(inner))
+}
+
 pub fn have(cmd: &str) -> bool {
     Command::new(cmd).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
 }
 
 /// Polls `f` until it returns Some, or panics with `what` and `dump()`.
-pub fn wait_until<T>(what: &str, mut f: impl FnMut() -> Option<T>, dump: impl Fn() -> String) -> T {
+/// With PIN_TEST_SHOW, prints `dump()` once it's satisfied.
+pub fn wait_until<T>(what: &str, f: impl FnMut() -> Option<T>, dump: impl Fn() -> String) -> T {
+    poll(what, f, dump, show())
+}
+
+fn poll<T>(what: &str, mut f: impl FnMut() -> Option<T>, dump: impl Fn() -> String, show: bool) -> T {
     let start = Instant::now();
     loop {
         if let Some(v) = f() {
+            if show {
+                eprint!("{}", frame(&format!("{} · {what}", test_name()), &dump()));
+            }
             return v;
         }
         if start.elapsed() > WAIT {
-            panic!("timed out waiting for {what}\n{}", dump());
+            panic!("timed out waiting for {what}\n{}", frame("screen", &dump()));
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -58,17 +170,38 @@ pub fn wait_until<T>(what: &str, mut f: impl FnMut() -> Option<T>, dump: impl Fn
 /// in it. Removed on drop.
 pub struct Sandbox {
     pub root: PathBuf,
+    /// Held while replaying live, so tests take turns on the terminal.
+    _turn: Option<MutexGuard<'static, ()>>,
+}
+
+const SANDBOX_PREFIX: &str = "pinentry-tmux-test-";
+
+/// Removes sandboxes left by test runs that were killed.
+fn remove_stale_sandboxes() {
+    let Ok(entries) = fs::read_dir(env::temp_dir()) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix(SANDBOX_PREFIX)) else { continue };
+        let pid = rest.split('-').next().and_then(|p| p.parse::<u32>().ok());
+        if pid.is_some_and(|pid| !PathBuf::from(format!("/proc/{pid}")).exists()) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 impl Sandbox {
     pub fn new() -> Sandbox {
+        static TURN: Mutex<()> = Mutex::new(());
+        let turn = live().map(|_| TURN.lock().unwrap_or_else(|e| e.into_inner()));
+        static CLEAN: OnceLock<()> = OnceLock::new();
+        CLEAN.get_or_init(remove_stale_sandboxes);
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let root = env::temp_dir().join(format!("pt{}-{n}", std::process::id()));
+        let root = env::temp_dir().join(format!("{SANDBOX_PREFIX}{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("tmux")).unwrap();
         fs::create_dir_all(root.join("tmp")).unwrap();
-        Sandbox { root }
+        Sandbox { root, _turn: turn }
     }
 
     /// TMPDIR for the pinentry, where its fifo directories go.
@@ -107,6 +240,19 @@ pub struct Pty {
 }
 
 impl Pty {
+    /// A pty for a terminal-sized test: `rows` x `cols`, or this terminal's
+    /// size when replaying live.
+    pub fn term(rows: u16, cols: u16) -> Pty {
+        let size = live().and_then(|tty| {
+            let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+            let fd = tty.lock().unwrap_or_else(|e| e.into_inner()).as_raw_fd();
+            let ok = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 && ws.ws_col > 0;
+            ok.then_some((ws.ws_row, ws.ws_col))
+        });
+        let (rows, cols) = size.unwrap_or((rows, cols));
+        Pty::new(rows, cols)
+    }
+
     pub fn new(rows: u16, cols: u16) -> Pty {
         let (mut m, mut s) = (0, 0);
         let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
@@ -129,8 +275,11 @@ impl Pty {
             let mut buf = [0; 4096];
             while let Ok(n @ 1..) = reader.read(&mut buf) {
                 p.lock().unwrap().process(&buf[..n]);
+                live_write(&buf[..n]);
             }
         });
+        // Start each pty on a clean screen, with the test in the window title.
+        live_write(format!("\x1b]2;{}\x07\x1b[0m\x1b[2J\x1b[H", test_name()).as_bytes());
         Pty { master, slave, path, parser }
     }
 
@@ -138,9 +287,25 @@ impl Pty {
         &self.path
     }
 
-    /// Types `keys` as if at the keyboard.
+    /// (rows, cols)
+    pub fn size(&self) -> (usize, usize) {
+        let (rows, cols) = self.screen().size();
+        (rows.into(), cols.into())
+    }
+
+    /// Types `keys` as if at the keyboard. Escape sequences go in one write
+    /// so they aren't mistaken for a lone Esc.
     pub fn send(&self, keys: &str) {
-        (&self.master).write_all(keys.as_bytes()).unwrap();
+        let delay = slow();
+        if delay.is_zero() || keys.contains('\x1b') {
+            (&self.master).write_all(keys.as_bytes()).unwrap();
+            thread::sleep(delay);
+            return;
+        }
+        for c in keys.chars() {
+            (&self.master).write_all(c.encode_utf8(&mut [0; 4]).as_bytes()).unwrap();
+            thread::sleep(delay);
+        }
     }
 
     /// Writes `s` as program output, e.g. a shell prompt before the pinentry.
@@ -170,8 +335,19 @@ impl Pty {
                 let screen = self.screen();
                 pred(&screen).then_some(screen)
             },
-            || format!("screen:\n{}", self.text()),
+            || self.dump(),
         )
+    }
+
+    /// The screen's rows, without trailing blank ones.
+    pub fn dump(&self) -> String {
+        let screen = self.screen();
+        let (_, cols) = screen.size();
+        let mut rows: Vec<String> = screen.rows(0, cols).map(|r| r.trim_end().to_string()).collect();
+        while rows.last().is_some_and(String::is_empty) {
+            rows.pop();
+        }
+        rows.join("\n")
     }
 
     pub fn wait_text(&self, needle: &str) -> vt100::Screen {
@@ -203,6 +379,21 @@ impl Pty {
             });
         }
         cmd
+    }
+}
+
+impl Drop for Pty {
+    fn drop(&mut self) {
+        if live().is_none() {
+            return;
+        }
+        // Linger on the final screen, then undo whatever modes the replayed
+        // programs set, and drop any replies the terminal sent to their queries.
+        thread::sleep(slow() * 5);
+        live_write(b"\x1b[0m\x1b[r\x1b[?1049l\x1b[?25h\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[2J\x1b[H");
+        if let Ok(tty) = File::open("/dev/tty") {
+            unsafe { libc::tcflush(tty.as_raw_fd(), libc::TCIFLUSH) };
+        }
     }
 }
 
@@ -343,7 +534,10 @@ impl Drop for Client {
 impl<'a> Tmux<'a> {
     pub fn start(sb: &'a Sandbox) -> Tmux<'a> {
         let t = Tmux { sb };
-        t.run(&["-f", "/dev/null", "new-session", "-d", "-x", "100", "-y", "30", "sleep 1d"]);
+        // The pane lives as long as the test process, so the server goes away
+        // even if the tests are killed before Drop runs.
+        let pane = format!("while kill -0 {} 2>/dev/null; do sleep 1; done", std::process::id());
+        t.run(&["-f", "/dev/null", "new-session", "-d", "-x", "100", "-y", "30", &pane]);
         t
     }
 
@@ -361,18 +555,15 @@ impl<'a> Tmux<'a> {
     }
 
     pub fn attach(&self, rows: u16, cols: u16) -> Client {
-        let pty = Pty::new(rows, cols);
+        let pty = Pty::term(rows, cols);
         let mut cmd = pty.command("tmux");
         self.sb.apply(&mut cmd).arg("attach");
         let child = cmd.spawn().unwrap();
         let tty = pty.path().to_string();
-        wait_until(
-            "client to attach",
-            || self.run(&["list-clients", "-F", "#{client_tty}"]).lines().any(|l| l == tty).then_some(()),
-            || pty.text(),
-        );
+        let attached = || self.run(&["list-clients", "-F", "#{client_tty}"]).lines().any(|l| l == tty);
         // The status line is the last thing drawn.
-        pty.wait("status line", |s| s.contents().contains("[0] 0:"));
+        let drawn = || pty.screen().contents().contains("[0] 0:");
+        poll("client to attach", || (attached() && drawn()).then_some(()), || pty.dump(), false);
         Client { pty, child }
     }
 

@@ -11,7 +11,7 @@ const ESC: &str = "\x1b";
 /// A pinentry pointed at a fresh 80x24 pty, with a shell line already on it.
 fn setup() -> (Sandbox, Pty, Pinentry) {
     let sb = Sandbox::new();
-    let pty = Pty::new(24, 80);
+    let pty = Pty::term(24, 80);
     pty.print("$ gpg --sign file\r\n");
     let p = Pinentry::spawn(&sb, &["--ttyname", pty.path()]);
     (sb, pty, p)
@@ -222,7 +222,7 @@ fn timeout() {
 #[test]
 fn ttyname_from_option() {
     let sb = Sandbox::new();
-    let pty = Pty::new(24, 80);
+    let pty = Pty::term(24, 80);
     let mut p = Pinentry::spawn(&sb, &[]);
     p.setup(&[&format!("OPTION ttyname={}", pty.path())]);
     p.start("GETPIN");
