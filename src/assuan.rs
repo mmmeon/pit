@@ -5,6 +5,7 @@ use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
 use std::process;
 
+use crate::gpg;
 use crate::sys;
 use crate::tmux;
 use crate::ui::{self, Echo, Kind, Outcome, Request, Secret, Style};
@@ -69,6 +70,7 @@ struct State {
     notok: Option<String>,
     repeat: Option<String>,
     repeat_error: Option<String>,
+    keyinfo: Option<String>,
     timeout: u64,
     // OPTIONs survive RESET.
     ttyname: Option<String>,
@@ -118,6 +120,13 @@ impl State {
     /// Asks the user. None means there's nowhere to ask.
     fn ask(&mut self, kind: Kind) -> io::Result<Option<Outcome>> {
         let mut req = self.request(kind);
+        // gpg's own descriptions quote the user ID; ssh's may only give the
+        // fingerprint.
+        if !req.desc.contains('"')
+            && let Some(name) = self.keyinfo.as_deref().and_then(gpg::key_name)
+        {
+            req.desc = gpg::add_name(&req.desc, &name);
+        }
         // Like pinentry: the error and repeat prompt apply to one dialog only.
         self.error = None;
         self.repeat = None;
@@ -249,6 +258,7 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
         "SETNOTOK" => set(&mut st.notok),
         "SETREPEAT" => st.repeat = Some(Some(text(arg)).filter(|s| !s.is_empty()).unwrap_or("Repeat:".into())),
         "SETREPEATERROR" => set(&mut st.repeat_error),
+        "SETKEYINFO" => st.keyinfo = Some(arg.trim().to_string()).filter(|k| k != "--clear"),
         "SETTIMEOUT" => st.timeout = arg.trim().parse().unwrap_or(0),
         "RESET" => {
             *st = State {
@@ -261,7 +271,7 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
             }
         }
         // Accepted but not shown.
-        "SETKEYINFO" | "SETREPEATOK" | "SETQUALITYBAR" | "SETQUALITYBAR_TT" | "SETGENPIN"
+        "SETREPEATOK" | "SETQUALITYBAR" | "SETQUALITYBAR_TT" | "SETGENPIN"
         | "SETGENPIN_TT" | "CLEARPASSPHRASE" | "NOP" => {}
         "GETINFO" => {
             let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
@@ -482,7 +492,6 @@ mod tests {
         let mut st = State::default();
         assert_eq!(run(&mut st, "FROBNICATE").1.unwrap_err().0, ERR_ASS_UNKNOWN_CMD);
         for line in [
-            "SETKEYINFO n/ABCDEF",
             "SETREPEATOK ok",
             "SETQUALITYBAR",
             "SETQUALITYBAR_TT tip",
@@ -493,6 +502,18 @@ mod tests {
         ] {
             assert_eq!(run(&mut st, line), (String::new(), Ok(())), "{line}");
         }
+    }
+
+    #[test]
+    fn keyinfo_is_kept_until_cleared() {
+        let mut st = State::default();
+        ok(&mut st, "SETKEYINFO n/ABCDEF");
+        assert_eq!(st.keyinfo.as_deref(), Some("n/ABCDEF"));
+        ok(&mut st, "SETKEYINFO --clear");
+        assert_eq!(st.keyinfo, None);
+        ok(&mut st, "SETKEYINFO s/ABCDEF");
+        ok(&mut st, "RESET");
+        assert_eq!(st.keyinfo, None);
     }
 
     #[test]

@@ -13,6 +13,7 @@
 //!   set -g @pinentry-echo marker|dots|none   (default: marker)
 
 mod assuan;
+mod gpg;
 mod sys;
 mod tmux;
 mod ui;

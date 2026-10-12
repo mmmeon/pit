@@ -8,6 +8,8 @@ tmux
             marker changes per key without revealing length)
   - passphrase, repeat/confirm-new-passphrase, confirm and message dialogs
   - wrong-passphrase and mismatch errors shown inline
+  - prompts that only give a fingerprint (ssh keys without a comment) get
+    the key's OpenPGP user ID next to it, if gpg knows the keygrip
   - enter submits, esc/ctrl-c cancels, backspace deletes, ctrl-u clears;
     button mnemonics in confirm dialogs
   - honours gpg-agent's pinentry timeout
