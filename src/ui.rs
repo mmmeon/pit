@@ -91,6 +91,8 @@ pub struct Request {
     pub style: Style,
     pub echo: Echo,
     pub title: String,
+    /// The command and pane that asked, if known.
+    pub origin: String,
     pub desc: String,
     pub prompt: String,
     pub error: String,
@@ -114,6 +116,7 @@ impl Request {
         put("style", self.style.name());
         put("echo", self.echo.name());
         put("title", &self.title);
+        put("origin", &self.origin);
         put("desc", &self.desc);
         put("prompt", &self.prompt);
         put("error", &self.error);
@@ -141,6 +144,7 @@ impl Request {
                 "style" => req.style = Style::parse(&value)?,
                 "echo" => req.echo = Echo::parse(&value)?,
                 "title" => req.title = value,
+                "origin" => req.origin = value,
                 "desc" => req.desc = value,
                 "prompt" => req.prompt = value,
                 "error" => req.error = value,
@@ -380,7 +384,9 @@ pub fn layout(req: &Request, max: usize) -> Layout {
     let err_w = [Some(req.error.as_str()), repeat_error].into_iter().flatten().map(width).max();
     // Reserve the error row whenever one can appear, so the size never changes.
     let err_w = err_w.filter(|&w| w > 0 || req.repeat.is_some());
-    let title = format!(" {} ", req.title);
+    // The origin goes last, so a narrow border cuts it before the rest.
+    let origin = if req.origin.is_empty() { String::new() } else { format!(" · {}", req.origin) };
+    let title = format!(" {}{origin} ", req.title);
 
     match req.style {
         Style::Bar => {
@@ -402,7 +408,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
         }
         Style::Line => {
             let title = match summary(&paras) {
-                Some(s) => format!(" {} · {s} ", req.title),
+                Some(s) => format!(" {} · {s}{origin} ", req.title),
                 None => title,
             };
             let line_w = err_w.map_or(0, |w| w + 2) + input_w;
@@ -774,6 +780,7 @@ mod tests {
             style: Style::Line,
             echo: Echo::Dots,
             title: "Unlock key".into(),
+            origin: String::new(),
             desc: "Please enter the passphrase for\n\"Alice <a@x>\"\n100% sure? 漢字".into(),
             prompt: "Pass phrase:".into(),
             error: "Bad\rpassphrase".into(),
@@ -1023,6 +1030,11 @@ mod tests {
         assert_eq!(lay.title, " Unlock key · Alice <a@x> ");
         assert!(lay.width >= 30);
         assert_eq!(layout(&req, 12).width, 12);
+
+        let req = Request { origin: "git commit @ work:2.1".into(), ..req };
+        assert_eq!(layout(&req, 200).title, " Unlock key · Alice <a@x> · git commit @ work:2.1 ");
+        let req = Request { style: Style::Box, ..req };
+        assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ work:2.1 ");
     }
 
     #[test]

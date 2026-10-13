@@ -192,6 +192,8 @@ fn opens_on_most_recently_active_client() {
     require_tmux!();
     let sb = Sandbox::new();
     let tmux = Tmux::start(&sb);
+    // Long enough that the note to `a` can't be gone before we look.
+    tmux.set("display-time", "10000");
     let b = tmux.attach(30, 100);
     let a = tmux.attach(30, 100);
     // Activity is tracked in whole seconds.
@@ -297,6 +299,10 @@ fn second_prompt_after_first() {
     }
 }
 
+fn uid() -> u32 {
+    unsafe { libc::getuid() }
+}
+
 fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap().trim().to_string()
 }
@@ -330,7 +336,7 @@ fn title_names_command_and_pane() {
     let mut s = Setup::new(&sb);
     // timeout stands in for git: the command typed, which runs the requester.
     let (pane, pid) = in_window(&s.tmux, "timeout 1000 sleep 999", "sleep");
-    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/0 {}", hostname())]);
+    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/{} {}", uid(), hostname())]);
     s.p.start("GETPIN");
     let screen = s.pty().wait_text("PIN:");
     let top = &rows(&screen)[popup_box(&screen).0];
@@ -345,7 +351,7 @@ fn owner_on_another_host_is_ignored() {
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
     let (_, pid) = in_window(&s.tmux, "sleep 999", "sleep");
-    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/0 elsewhere.invalid")]);
+    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/{} elsewhere.invalid", uid())]);
     s.p.start("GETPIN");
     let screen = s.pty().wait_text("PIN:");
     let top = &rows(&screen)[popup_box(&screen).0];

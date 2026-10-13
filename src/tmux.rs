@@ -106,7 +106,6 @@ fn shell_quote(s: &[u8]) -> String {
 /// Asks in a popup on `client`. None means the popup couldn't be shown.
 pub fn prompt(client: &Client, req: &Request, lay: &Layout) -> io::Result<Option<Outcome>> {
     let dir = sys::mkdtemp()?;
-    notify_others(client, &req.title);
     let outcome = popup(client, req, lay, &dir);
     let _ = fs::remove_dir_all(&dir);
     outcome
@@ -155,6 +154,12 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
             let line = Secret(buf.0.drain(..=i).collect());
             if line.0 != b"READY\n" {
                 break Some(Outcome::decode(&line.0));
+            }
+            if !ready {
+                // Only once it's really up, and without the origin: other
+                // clients may be other people, and command lines can hold
+                // secrets.
+                notify_others(client, &req.title);
             }
             ready = true;
             continue;

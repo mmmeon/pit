@@ -59,6 +59,10 @@ pub fn winsize(fd: RawFd) -> Option<(usize, usize)> {
     ok.then_some((ws.ws_col as usize, ws.ws_row as usize))
 }
 
+pub fn uid() -> u32 {
+    unsafe { libc::getuid() }
+}
+
 pub fn random() -> u32 {
     let mut n = 0u32;
     unsafe { libc::getrandom((&raw mut n).cast(), 4, 0) };

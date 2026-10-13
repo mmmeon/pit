@@ -108,6 +108,7 @@ impl State {
             style: Style::default(),
             echo: Echo::default(),
             title: self.title.clone().unwrap_or_else(|| "gpg".into()),
+            origin: String::new(),
             desc: self.desc.clone().unwrap_or_default(),
             prompt: pick(&self.prompt, &self.default_prompt, "PIN:"),
             error: self.error.clone().unwrap_or_default(),
@@ -149,9 +150,7 @@ impl State {
             req.style = opt("@pinentry-style").and_then(|s| Style::parse(&s)).unwrap_or_default();
             req.echo = opt("@pinentry-echo").and_then(|s| Echo::parse(&s)).unwrap_or_default();
             // The popup can land far from the command that asked; say which.
-            if let Some(label) = self.owner.map(origin::find).and_then(|o| o.label()) {
-                req.title = format!("{} · {label}", req.title);
-            }
+            req.origin = self.owner.map(origin::find).and_then(|o| o.label()).unwrap_or_default();
             let lay = ui::layout(&req, client.width.saturating_sub(4));
             req.width = lay.width;
             if let Some(outcome) = tmux::prompt(&client, &req, &lay)? {

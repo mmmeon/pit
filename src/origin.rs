@@ -2,8 +2,9 @@
 //! pane it runs in. Read from /proc, so Linux only.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 
-use crate::tmux;
+use crate::{sys, tmux};
 
 /// Shells, and what sits above them, end the walk up from the requester:
 /// the command typed at the prompt is the last process below one.
@@ -12,8 +13,9 @@ const STOP: &[&str] = &[
     "login", "sshd", "systemd", "init",
 ];
 
-/// Longest command shown; the rest is cut with an ellipsis.
+/// Longest command and pane shown; the rest is cut with an ellipsis.
 const MAX_CMD: usize = 40;
+const MAX_PANE: usize = 24;
 
 pub struct Origin {
     pub cmd: Option<String>,
@@ -30,9 +32,14 @@ impl Origin {
     }
 }
 
-/// The pid in `owner=<pid>/<uid> <host>`, if it's a process on this host.
+/// The pid in `owner=<pid>/<uid> <host>`, if it's our own user's process
+/// on this host.
 pub fn owner_pid(value: &str) -> Option<u32> {
     let (pid, rest) = value.split_once('/')?;
+    let uid = rest.split(' ').next()?;
+    if uid.parse() != Ok(sys::uid()) {
+        return None;
+    }
     if let Some((_, host)) = rest.split_once(' ')
         && Some(host.trim()) != hostname().as_deref()
     {
@@ -42,6 +49,11 @@ pub fn owner_pid(value: &str) -> Option<u32> {
 }
 
 pub fn find(pid: u32) -> Origin {
+    // The agent's pid may mean another process here (another pid namespace,
+    // or reused since): never describe anyone else's.
+    if !ours(pid) {
+        return Origin { cmd: None, pane: None };
+    }
     let panes = tmux::pane_pids();
     let chain = ancestors(pid);
     let pane = chain
@@ -51,13 +63,17 @@ pub fn find(pid: u32) -> Origin {
     let top = chain
         .iter()
         .take_while(|&&p| !panes.iter().any(|(pp, _)| *pp == p))
-        .take_while(|&&p| comm(p).is_some_and(|c| !STOP.contains(&c.as_str())))
+        .take_while(|&&p| ours(p) && comm(p).is_some_and(|c| !STOP.contains(&c.as_str())))
         .last()
         .or(chain.first());
     Origin {
         cmd: top.and_then(|&p| cmdline(p)),
-        pane,
+        pane: pane.map(|p| cut(&p, MAX_PANE)),
     }
+}
+
+fn ours(pid: u32) -> bool {
+    fs::metadata(format!("/proc/{pid}")).is_ok_and(|m| m.uid() == sys::uid())
 }
 
 fn hostname() -> Option<String> {
@@ -125,14 +141,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owner_from_other_host_is_ignored() {
-        assert_eq!(owner_pid("1234/1000 some-other-host.invalid"), None);
-        assert_eq!(
-            owner_pid(&format!("1234/1000 {}", hostname().unwrap())),
-            Some(1234)
-        );
-        assert_eq!(owner_pid("1234/1000"), Some(1234));
-        assert_eq!(owner_pid("1/0 x"), None);
+    fn owner_must_be_us_on_this_host() {
+        let (uid, host) = (sys::uid(), hostname().unwrap());
+        assert_eq!(owner_pid(&format!("1234/{uid} some-other-host.invalid")), None);
+        assert_eq!(owner_pid(&format!("1234/{uid} {host}")), Some(1234));
+        assert_eq!(owner_pid(&format!("1234/{uid}")), Some(1234));
+        assert_eq!(owner_pid(&format!("1234/{} {host}", uid + 1)), None);
+        assert_eq!(owner_pid(&format!("1/{uid} {host}")), None);
         assert_eq!(owner_pid("junk"), None);
     }
 
@@ -141,6 +156,11 @@ mod tests {
         let me = std::process::id();
         assert!(ancestors(me).starts_with(&[me, std::os::unix::process::parent_id()]));
         assert!(cmdline(me).is_some_and(|c| !c.contains('/')));
+        assert!(ours(me));
+        // init is root's: never described to anyone else.
+        if sys::uid() != 0 {
+            assert!(find(1).label().is_none());
+        }
     }
 
     #[test]
