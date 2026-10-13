@@ -69,6 +69,9 @@ fn ctrl_u_clears_and_ctrl_d_only_cancels_when_empty() {
     pty.wait_text("PIN:");
     pty.send("wrong\x15ab\x04c\r");
     assert_eq!(p.finish(), ["D abc", "OK"]);
+    // Otherwise the old prompt matches, and ^D can arrive before raw mode,
+    // whose flush drops it.
+    pty.wait_gone("PIN:");
 
     p.start("GETPIN");
     pty.wait_text("PIN:");
@@ -168,6 +171,7 @@ fn repeat_and_mismatch() {
     pty.wait_text("Again:");
     pty.send("same\r");
     assert_eq!(p.finish(), ["S PIN_REPEATED", "D same", "OK"]);
+    pty.wait_gone("New:");
 
     // The repeat applies to one GETPIN only.
     p.start("GETPIN");
