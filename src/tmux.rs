@@ -45,8 +45,15 @@ pub fn owns_tty(tty: &str) -> bool {
 /// popup lands on the window you're looking at. A pane's tty doesn't say
 /// which client is looking at it, and several can be.
 pub fn find_client() -> Option<Client> {
-    tmux(&["list-clients", "-F", "#{client_activity}\t#{client_tty}\t#{client_width}"])?
-        .lines()
+    clients().into_iter().max_by_key(|(activity, _)| *activity).map(|(_, c)| c)
+}
+
+/// All attached clients, with their last activity time.
+fn clients() -> Vec<(u64, Client)> {
+    let Some(out) = tmux(&["list-clients", "-F", "#{client_activity}\t#{client_tty}\t#{client_width}"]) else {
+        return Vec::new();
+    };
+    out.lines()
         .filter_map(|l| {
             let mut f = l.split('\t');
             let activity: u64 = f.next()?.parse().ok()?;
@@ -54,8 +61,16 @@ pub fn find_client() -> Option<Client> {
             let width = f.next()?.parse().ok()?;
             Some((activity, Client { tty, width }))
         })
-        .max_by_key(|(activity, _)| *activity)
-        .map(|(_, c)| c)
+        .collect()
+}
+
+/// Tells every other client where the prompt went, so whoever's looking
+/// at another terminal knows gpg is waiting.
+fn notify_others(client: &Client) {
+    let msg = format!("pinentry: prompt open on {}", client.tty);
+    for (_, other) in clients().iter().filter(|(_, c)| c.tty != client.tty) {
+        let _ = tmux(&["display-message", "-c", &other.tty, &msg]);
+    }
 }
 
 /// A global tmux user option, e.g. `@pinentry-style`.
@@ -72,6 +87,7 @@ fn shell_quote(s: &[u8]) -> String {
 /// Asks in a popup on `client`. None means the popup couldn't be shown.
 pub fn prompt(client: &Client, req: &Request, lay: &Layout) -> io::Result<Option<Outcome>> {
     let dir = sys::mkdtemp()?;
+    notify_others(client);
     let outcome = popup(client, req, lay, &dir);
     let _ = fs::remove_dir_all(&dir);
     outcome
