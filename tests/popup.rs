@@ -359,3 +359,39 @@ fn owner_on_another_host_is_ignored() {
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
 }
+
+#[test]
+fn title_skips_sh_c_wrappers() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    // Like git running gpg.program through `sh -c`: name git, not gpg.
+    let (pane, pid) = in_window(&s.tmux, "timeout 999 sh -c 'sleep 998; :'", "sleep");
+    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/{} {}", uid(), hostname())]);
+    s.p.start("GETPIN");
+    let screen = s.pty().wait_text("PIN:");
+    let top = &rows(&screen)[popup_box(&screen).0];
+    assert!(top.contains(&format!(" Unlock · timeout 999 sh -c sleep 998; : @ {pane} ")), "{top}");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
+fn hash_in_title_is_not_a_tmux_format() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let tmux = Tmux::start(&sb);
+    tmux.set("display-time", "10000");
+    let b = tmux.attach(30, 100);
+    let a = tmux.attach(30, 100);
+    thread::sleep(Duration::from_millis(1100));
+    b.pty.send("x");
+    let mut p = Pinentry::spawn(&sb, &[]);
+    p.setup(&["SETTITLE Key #{pane_id}"]);
+    p.start("GETPIN");
+    let screen = b.pty.wait_text("PIN:");
+    assert!(rows(&screen)[popup_box(&screen).0].contains(" Key #{pane_id} "));
+    a.pty.wait_text("pinentry: Key #{pane_id} - prompt open on");
+    b.pty.send("\x1b");
+    assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
+}

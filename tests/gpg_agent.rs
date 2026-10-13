@@ -95,4 +95,5 @@ fn ssh_request_names_command_and_pane() {
     assert!(screen.contents().contains("· ssh-add "), "{}", screen.contents());
     client.pty.send("\x1b");
     client.pty.wait_gone("ssh-add");
+    assert_eq!(sb.leftovers(), Vec::<String>::new());
 }

@@ -204,12 +204,12 @@ impl Outcome {
     }
 }
 
-fn width(s: &str) -> usize {
+pub fn width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }
 
 /// Splits `s` after at most `w` columns (always taking at least one char).
-fn split_at_width(s: &str, w: usize) -> (&str, &str) {
+pub fn split_at_width(s: &str, w: usize) -> (&str, &str) {
     let mut used = 0;
     for (i, c) in s.char_indices() {
         used += c.width().unwrap_or(0);
@@ -407,12 +407,14 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             Layout { title, desc, error_row, input_row, rows: input_row + 1, width: w }
         }
         Style::Line => {
-            let title = match summary(&paras) {
-                Some(s) => format!(" {} · {s}{origin} ", req.title),
-                None => title,
+            let bare = match summary(&paras) {
+                Some(s) => format!(" {} · {s} ", req.title),
+                None => format!(" {} ", req.title),
             };
+            let title = format!("{}{origin} ", bare.trim_end());
+            // Sized without the origin, which may then be cut.
             let line_w = err_w.map_or(0, |w| w + 2) + input_w;
-            let w = line_w.max(width(&title) + 2).clamp(30.min(max), max);
+            let w = line_w.max(width(&bare) + 2).clamp(30.min(max), max);
             Layout { title, desc: Vec::new(), error_row: None, input_row: 0, rows: 1, width: w }
         }
     }
@@ -1033,6 +1035,7 @@ mod tests {
 
         let req = Request { origin: "git commit @ work:2.1".into(), ..req };
         assert_eq!(layout(&req, 200).title, " Unlock key · Alice <a@x> · git commit @ work:2.1 ");
+        assert_eq!(layout(&req, 200).width, layout(&Request { origin: String::new(), ..req.clone() }, 200).width);
         let req = Request { style: Style::Box, ..req };
         assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ work:2.1 ");
     }

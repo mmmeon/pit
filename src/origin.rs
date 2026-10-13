@@ -4,14 +4,14 @@
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 
-use crate::{sys, tmux};
+use crate::{sys, tmux, ui};
 
 /// Shells, and what sits above them, end the walk up from the requester:
-/// the command typed at the prompt is the last process below one.
-const STOP: &[&str] = &[
-    "sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh",
-    "login", "sshd", "systemd", "init",
-];
+/// the command typed at the prompt is the last process below one. A shell
+/// running `-c` for another program (git's gpg.program, make, editors) is
+/// passed through instead.
+const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh"];
+const ABOVE: &[&str] = &["login", "sshd", "systemd", "init"];
 
 /// Longest command and pane shown; the rest is cut with an ellipsis.
 const MAX_CMD: usize = 40;
@@ -64,13 +64,24 @@ pub fn find(pid: u32) -> Origin {
     let top = chain
         .iter()
         .take_while(|&&p| !panes.iter().any(|(pp, _)| *pp == p))
-        .take_while(|&&p| ours(p) && comm(p).is_some_and(|c| !STOP.contains(&c.as_str())))
+        .take_while(|&&p| ours(p) && comm(p).is_some_and(|c| !stops(&c) || wrapper(p)))
+        .filter(|&&p| !wrapper(p))
         .last()
         .or(chain.first());
     Origin {
         cmd: top.and_then(|&p| cmdline(p)),
         pane: pane.map(|p| cut(&p, MAX_PANE)),
     }
+}
+
+fn stops(comm: &str) -> bool {
+    SHELLS.contains(&comm) || ABOVE.contains(&comm)
+}
+
+/// A shell started with `-c` (or `-ec` and the like) to run a command.
+fn wrapper(pid: u32) -> bool {
+    comm(pid).is_some_and(|c| SHELLS.contains(&c.as_str()))
+        && args(pid).iter().skip(1).take_while(|a| a.starts_with('-')).any(|a| !a.starts_with("--") && a.contains('c'))
 }
 
 fn ours(pid: u32) -> bool {
@@ -112,29 +123,30 @@ fn comm(pid: u32) -> Option<String> {
     Some(c.trim().trim_start_matches('-').to_string())
 }
 
-fn cmdline(pid: u32) -> Option<String> {
-    let raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let mut args = raw
-        .split(|&b| b == 0)
-        .filter(|a| !a.is_empty())
-        .map(String::from_utf8_lossy);
-    let argv0 = args.next()?;
-    let name = argv0.rsplit('/').next().unwrap_or(&argv0).to_string();
-    let line: String = std::iter::once(name)
-        .chain(args.map(|a| a.into_owned()))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    Some(cut(&line, MAX_CMD))
+fn args(pid: u32) -> Vec<String> {
+    let raw = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect()
 }
 
+fn cmdline(pid: u32) -> Option<String> {
+    let mut args = args(pid).into_iter();
+    let argv0 = args.next()?;
+    let name = argv0.rsplit('/').next().unwrap_or(&argv0).to_string();
+    let line = std::iter::once(name).chain(args).collect::<Vec<_>>().join(" ");
+    Some(cut(&clean(&line), MAX_CMD))
+}
+
+/// Without control characters, which would draw on the terminal.
+pub fn clean(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// `s` in at most `max` columns, cut with an ellipsis.
 fn cut(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
+    if ui::width(s) <= max {
         return s.to_string();
     }
-    s.chars().take(max - 1).chain(['…']).collect()
+    format!("{}…", ui::split_at_width(s, max - 1).0)
 }
 
 #[cfg(test)]
@@ -168,6 +180,7 @@ mod tests {
     fn long_commands_are_cut() {
         assert_eq!(cut("abcdef", 4), "abc…");
         assert_eq!(cut("abc", 4), "abc");
+        assert_eq!(cut("漢字漢字", 5), "漢字…");
     }
 
     #[test]

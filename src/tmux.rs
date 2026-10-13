@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::origin;
 use crate::sys;
 use crate::ui::{self, Layout, Outcome, Request, Secret, Style};
 
@@ -73,7 +74,7 @@ pub fn pane_pids() -> Vec<(u32, String)> {
     out.lines()
         .filter_map(|l| {
             let (pid, pane) = l.split_once('\t')?;
-            Some((pid.parse().ok()?, pane.to_string()))
+            Some((pid.parse().ok()?, origin::clean(pane)))
         })
         .collect()
 }
