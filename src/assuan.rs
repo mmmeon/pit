@@ -6,6 +6,7 @@ use std::os::fd::AsRawFd;
 use std::process;
 
 use crate::gpg;
+use crate::origin;
 use crate::sys;
 use crate::tmux;
 use crate::ui::{self, Echo, Kind, Outcome, Request, Secret, Style};
@@ -74,6 +75,8 @@ struct State {
     timeout: u64,
     // OPTIONs survive RESET.
     ttyname: Option<String>,
+    /// The requesting process, from `owner`, when it's on this host.
+    owner: Option<u32>,
     ttytype: Option<String>,
     default_ok: Option<String>,
     default_cancel: Option<String>,
@@ -87,6 +90,7 @@ impl State {
         let value = Some(text(value.trim_start_matches([' ', '='])));
         match name.to_ascii_lowercase().as_str() {
             "ttyname" => self.ttyname = value,
+            "owner" => self.owner = value.as_deref().and_then(origin::owner_pid),
             "ttytype" => self.ttytype = value,
             "default-ok" => self.default_ok = value,
             "default-cancel" => self.default_cancel = value,
@@ -144,6 +148,10 @@ impl State {
             let opt = |name| tmux::option(name);
             req.style = opt("@pinentry-style").and_then(|s| Style::parse(&s)).unwrap_or_default();
             req.echo = opt("@pinentry-echo").and_then(|s| Echo::parse(&s)).unwrap_or_default();
+            // The popup can land far from the command that asked; say which.
+            if let Some(label) = self.owner.map(origin::find).and_then(|o| o.label()) {
+                req.title = format!("{} · {label}", req.title);
+            }
             let lay = ui::layout(&req, client.width.saturating_sub(4));
             req.width = lay.width;
             if let Some(outcome) = tmux::prompt(&client, &req, &lay)? {

@@ -3,6 +3,8 @@ pinentry-tmux - gpg-agent pinentry that prompts in a tmux popup
 tmux
   - popup on the most recently active client, over the current window
   - other attached clients get a status-line note saying where it is
+  - popup title names the command that asked and its pane, e.g.
+    "git commit -S @ work:2.1" (from the pid gpg-agent passes as owner)
   - sized to fit the prompt
   - styles: set -g @pinentry-style bar|box|line   (default bar)
   - echo:   set -g @pinentry-echo marker|dots|none (default marker;

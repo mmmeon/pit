@@ -14,6 +14,7 @@
 
 mod assuan;
 mod gpg;
+mod origin;
 mod sys;
 mod tmux;
 mod ui;

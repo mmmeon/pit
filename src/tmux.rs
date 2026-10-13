@@ -64,10 +64,29 @@ fn clients() -> Vec<(u64, Client)> {
         .collect()
 }
 
+/// Each pane's process, with the pane as `session:window.pane`.
+pub fn pane_pids() -> Vec<(u32, String)> {
+    let Some(out) = tmux(&["list-panes", "-a", "-F", "#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}"])
+    else {
+        return Vec::new();
+    };
+    out.lines()
+        .filter_map(|l| {
+            let (pid, pane) = l.split_once('\t')?;
+            Some((pid.parse().ok()?, pane.to_string()))
+        })
+        .collect()
+}
+
+/// Keeps tmux from expanding `#` in text we pass as a format.
+fn literal(s: &str) -> String {
+    s.replace('#', "##")
+}
+
 /// Tells every other client where the prompt went, so whoever's looking
 /// at another terminal knows gpg is waiting.
-fn notify_others(client: &Client) {
-    let msg = format!("pinentry: prompt open on {}", client.tty);
+fn notify_others(client: &Client, title: &str) {
+    let msg = literal(&format!("pinentry: {title} - prompt open on {}", client.tty));
     for (_, other) in clients().iter().filter(|(_, c)| c.tty != client.tty) {
         let _ = tmux(&["display-message", "-c", &other.tty, &msg]);
     }
@@ -87,7 +106,7 @@ fn shell_quote(s: &[u8]) -> String {
 /// Asks in a popup on `client`. None means the popup couldn't be shown.
 pub fn prompt(client: &Client, req: &Request, lay: &Layout) -> io::Result<Option<Outcome>> {
     let dir = sys::mkdtemp()?;
-    notify_others(client);
+    notify_others(client, &req.title);
     let outcome = popup(client, req, lay, &dir);
     let _ = fs::remove_dir_all(&dir);
     outcome
@@ -112,7 +131,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
     let cmd = [exe.as_os_str().as_bytes(), b"--ui", dir.as_os_str().as_bytes()].map(shell_quote);
     let mut popup = Command::new("tmux")
         .args(["display-popup", "-E", "-c", &client.tty, "-x", x, "-y", y])
-        .args(["-w", &w.to_string(), "-h", &(lay.rows + 2).to_string(), "-T", &lay.title])
+        .args(["-w", &w.to_string(), "-h", &(lay.rows + 2).to_string(), "-T", &literal(&lay.title)])
         .arg(cmd.join(" "))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
