@@ -201,6 +201,7 @@ fn opens_on_most_recently_active_client() {
     p.start("GETPIN");
     b.pty.wait_text("PIN:");
     assert!(!a.pty.text().contains("PIN:"));
+    a.pty.wait_text(&format!("pinentry: gpg - prompt open on {}", b.pty.path()));
     b.pty.send("ok\r");
     assert_eq!(p.finish(), ["D ok", "OK"]);
 }
@@ -294,4 +295,61 @@ fn second_prompt_after_first() {
         assert_eq!(s.p.finish(), [format!("D {pin}"), "OK".into()]);
         s.pty().wait_gone("PIN:");
     }
+}
+
+fn hostname() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap().trim().to_string()
+}
+
+/// Processes below `pid`, depth first.
+fn descendants(pid: u32) -> Vec<u32> {
+    let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
+    children.split_whitespace().filter_map(|c| c.parse().ok()).flat_map(|c| [vec![c], descendants(c)].concat()).collect()
+}
+
+/// Runs `cmd` in a new window. Returns its pane as `session:window.pane` and
+/// the pid of the process called `name` under it.
+fn in_window(tmux: &Tmux, cmd: &str, name: &str) -> (String, u32) {
+    // The trailing `:` keeps the shell from exec'ing the command.
+    let out = tmux.run(&["new-window", "-d", "-P", "-F", "#{pane_pid} #S:#I.#P", &format!("{cmd}; :")]);
+    let (shell, pane) = out.trim().split_once(' ').unwrap();
+    let shell: u32 = shell.parse().unwrap();
+    let comm = |p: u32| std::fs::read_to_string(format!("/proc/{p}/comm")).unwrap_or_default();
+    let pid = wait_until(
+        name,
+        || descendants(shell).into_iter().find(|&p| comm(p).trim() == name),
+        || tmux.run(&["list-panes", "-a"]),
+    );
+    (pane.to_string(), pid)
+}
+
+#[test]
+fn title_names_command_and_pane() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    // timeout stands in for git: the command typed, which runs the requester.
+    let (pane, pid) = in_window(&s.tmux, "timeout 1000 sleep 999", "sleep");
+    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/0 {}", hostname())]);
+    s.p.start("GETPIN");
+    let screen = s.pty().wait_text("PIN:");
+    let top = &rows(&screen)[popup_box(&screen).0];
+    assert!(top.contains(&format!(" Unlock · timeout 1000 sleep 999 @ {pane} ")), "{top}");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
+fn owner_on_another_host_is_ignored() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let (_, pid) = in_window(&s.tmux, "sleep 999", "sleep");
+    s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/0 elsewhere.invalid")]);
+    s.p.start("GETPIN");
+    let screen = s.pty().wait_text("PIN:");
+    let top = &rows(&screen)[popup_box(&screen).0];
+    assert!(top.starts_with("┌─ Unlock ─"), "{top}");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
 }

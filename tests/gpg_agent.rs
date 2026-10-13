@@ -63,3 +63,36 @@ fn get_passphrase_through_popup() {
     client.pty.wait_gone("Passphrase:");
     assert_eq!(sb.leftovers(), Vec::<String>::new());
 }
+
+#[test]
+#[ignore = "starts a real gpg-agent"]
+fn ssh_request_names_command_and_pane() {
+    require_tmux!();
+    if !have("gpg-connect-agent") || !have("ssh-add") || !have("ssh-keygen") {
+        eprintln!("skipping: gpg-connect-agent or ssh tools not found");
+        return;
+    }
+    let sb = Sandbox::new();
+    let home = sb.root.join("gnupg");
+    fs::create_dir(&home).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(home.join("gpg-agent.conf"), format!("pinentry-program {BIN}\nenable-ssh-support\n")).unwrap();
+    let key = sb.root.join("id");
+    let status = Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-f"]).arg(&key).status().unwrap();
+    assert!(status.success());
+
+    let tmux = Tmux::start(&sb);
+    let client = tmux.attach(30, 100);
+    let agent = Agent { sb: &sb };
+    assert!(agent.command("gpg-connect-agent").arg("/bye").stdout(Stdio::null()).status().unwrap().success());
+    let out = agent.command("gpgconf").args(["--list-dirs", "agent-ssh-socket"]).output().unwrap();
+    let sock = String::from_utf8(out.stdout).unwrap();
+
+    // Adding a key makes the agent ask for a passphrase to protect it with.
+    let cmd = format!("SSH_AUTH_SOCK={} ssh-add {}; :", sock.trim(), key.display());
+    let pane = tmux.run(&["new-window", "-d", "-P", "-F", "#S:#I.#P", &cmd]);
+    let screen = client.pty.wait_text(&format!(" @ {} ", pane.trim()));
+    assert!(screen.contents().contains("· ssh-add "), "{}", screen.contents());
+    client.pty.send("\x1b");
+    client.pty.wait_gone("ssh-add");
+}
