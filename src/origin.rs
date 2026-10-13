@@ -49,8 +49,9 @@ pub fn owner_pid(value: &str) -> Option<u32> {
 }
 
 pub fn find(pid: u32) -> Origin {
-    // The agent's pid may mean another process here (another pid namespace,
-    // or reused since): never describe anyone else's.
+    // The kernel gives the agent the requester's pid as seen from its own pid
+    // namespace, which is ours too, so it's the right process unless it has
+    // exited and the pid was reused: never describe anyone else's.
     if !ours(pid) {
         return Origin { cmd: None, pane: None };
     }
