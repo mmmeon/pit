@@ -384,9 +384,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
     let err_w = [Some(req.error.as_str()), repeat_error].into_iter().flatten().map(width).max();
     // Reserve the error row whenever one can appear, so the size never changes.
     let err_w = err_w.filter(|&w| w > 0 || req.repeat.is_some());
-    // The origin goes last, so a narrow border cuts it before the rest.
-    let origin = if req.origin.is_empty() { String::new() } else { format!(" · {}", req.origin) };
-    let title = format!(" {}{origin} ", req.title);
+    let head = format!(" {}", req.title);
 
     match req.style {
         Style::Bar => {
@@ -395,6 +393,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             let desc = wrap_parts(parts, " · ", max);
             let error_row = err_w.map(|_| desc.len());
             let input_row = desc.len() + usize::from(err_w.is_some());
+            let title = title(&head, &req.origin, max);
             Layout { title, desc, error_row, input_row, rows: input_row + 1, width: max }
         }
         Style::Box => {
@@ -404,6 +403,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             let top = desc.len() + usize::from(!desc.is_empty());
             let error_row = err_w.map(|_| top);
             let input_row = top + usize::from(err_w.is_some());
+            let title = title(&head, &req.origin, w);
             Layout { title, desc, error_row, input_row, rows: input_row + 1, width: w }
         }
         Style::Line => {
@@ -411,13 +411,32 @@ pub fn layout(req: &Request, max: usize) -> Layout {
                 Some(s) => format!(" {} · {s} ", req.title),
                 None => format!(" {} ", req.title),
             };
-            let title = format!("{}{origin} ", bare.trim_end());
             // Sized without the origin, which may then be cut.
             let line_w = err_w.map_or(0, |w| w + 2) + input_w;
             let w = line_w.max(width(&bare) + 2).clamp(30.min(max), max);
+            let title = title(bare.trim_end(), &req.origin, w);
             Layout { title, desc: Vec::new(), error_row: None, input_row: 0, rows: 1, width: w }
         }
     }
+}
+
+/// Fewest columns of the origin worth showing in a title.
+const MIN_ORIGIN: usize = 8;
+
+/// The border title in `w` columns: `head`, then the origin. tmux would cut
+/// it mid-separator, so the origin is cut here, or left out if too little of
+/// it would show.
+fn title(head: &str, origin: &str, w: usize) -> String {
+    let cut = |s: &str, w| render(&[("", s.to_string())], w);
+    let full = if origin.is_empty() { format!("{head} ") } else { format!("{head} · {origin} ") };
+    if width(&full) <= w {
+        return full;
+    }
+    let room = w.saturating_sub(width(head) + width(" ·  "));
+    if !origin.is_empty() && room >= MIN_ORIGIN {
+        return format!("{head} · {} ", cut(origin, room));
+    }
+    format!("{} ", cut(head, w.saturating_sub(1)))
 }
 
 /// Renders styled segments, cut to `w` columns with an ellipsis.
@@ -1034,10 +1053,25 @@ mod tests {
         assert_eq!(layout(&req, 12).width, 12);
 
         let req = Request { origin: "git commit @ work:2.1".into(), ..req };
-        assert_eq!(layout(&req, 200).title, " Unlock key · Alice <a@x> · git commit @ work:2.1 ");
+        // The popup isn't widened for the origin, so it's cut to fit.
+        assert_eq!(layout(&req, 200).title, " Unlock key · Alice <a@x> · git commit @ wo… ");
         assert_eq!(layout(&req, 200).width, layout(&Request { origin: String::new(), ..req.clone() }, 200).width);
         let req = Request { style: Style::Box, ..req };
-        assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ work:2.1 ");
+        assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ wo… ");
+    }
+
+    #[test]
+    fn title_fits_its_border() {
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", 40), " Unlock · git commit @ work:2.1 ");
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", 22), " Unlock · git commit… ");
+        // Too little of the origin would show: no dangling separator.
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", 18), " Unlock ");
+        assert_eq!(title(" Unlock key", "", 8), " Unloc… ");
+        for w in 1..40 {
+            let t = title(" Unlock · Alice <a@x>", "git commit @ work:2.1", w);
+            assert!(width(&t) <= w.max(2), "w={w} {t:?}");
+            assert!(!t.trim_end().ends_with('·'), "w={w} {t:?}");
+        }
     }
 
     #[test]

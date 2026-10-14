@@ -27,7 +27,7 @@ screenshots
     │ created 2024-03-01.                                                  │
     │ Passphrase: [•·•·]                                                   │
     └──────────────────────────────────────────────────────────────────────┘
-    [work] 0:zsh- 2:git*                            "laptop" 12:27 14-Oct-26
+    [work] 0:zsh- 2:git*
 
   box, centred:
 
@@ -42,7 +42,7 @@ screenshots
 
   line, the description summed up in the title:
 
-    ┌─ gpg · Alice <alice@example.org> · ─┐
+    ┌─ gpg · Alice <alice@example.org> ───┐
     │ Passphrase: [••·•]                  │
     └─────────────────────────────────────┘
 

@@ -61,6 +61,8 @@ impl<'a> Desk<'a> {
         let client = tmux.attach(ROWS, COLS);
         tmux.run(&["rename-session", "work"]);
         tmux.run(&["rename-window", "zsh"]);
+        // No hostname or clock in the screenshots.
+        tmux.set("status-right", "");
         // perl renames itself, standing in for git; sleep is the requester.
         let out = tmux.run(&[
             "new-window", "-t", "work:2", "-n", "git", "-P", "-F", "#{pane_pid}",
