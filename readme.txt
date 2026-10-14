@@ -18,6 +18,92 @@ tmux
   - honours gpg-agent's pinentry timeout
   - popup closes when gpg-agent kills the pinentry; no leftover files
 
+screenshots
+  bar (default), along the bottom of the client:
+
+    ┌─ gpg · git commit -S @ work:2.0 ─────────────────────────────────────┐
+    │ Please enter the passphrase to unlock the OpenPGP secret key         │
+    │ "Alice <alice@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2 │
+    │ created 2024-03-01.                                                  │
+    │ Passphrase: [•·•·]                                                   │
+    └──────────────────────────────────────────────────────────────────────┘
+    [work] 0:zsh- 2:git*                            "laptop" 12:27 14-Oct-26
+
+  box, centred:
+
+    ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+    │ Please enter the passphrase to unlock the OpenPGP secret key: │
+    │ "Alice <alice@example.org>"                                   │
+    │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
+    │ created 2024-03-01.                                           │
+    │                                                               │
+    │ Passphrase: [•••·]                                            │
+    └───────────────────────────────────────────────────────────────┘
+
+  line, the description summed up in the title:
+
+    ┌─ gpg · Alice <alice@example.org> · ─┐
+    │ Passphrase: [••·•]                  │
+    └─────────────────────────────────────┘
+
+  echo marker, dots, none (after typing 7 characters):
+
+    │ Passphrase: [•··•]                 │
+    │ Passphrase: •••••••                │
+    │ Passphrase:                        │
+
+  wrong passphrase:
+
+    ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+    │ Please enter the passphrase to unlock the OpenPGP secret key: │
+    │ "Alice <alice@example.org>"                                   │
+    │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
+    │ created 2024-03-01.                                           │
+    │                                                               │
+    │ Bad Passphrase (try 2 of 3)                                   │
+    │ Passphrase: [····]                                            │
+    └───────────────────────────────────────────────────────────────┘
+
+  new passphrase, after a mismatch:
+
+    ┌─ gpg · git commit -S @ work:2.0 ─────────────────┐
+    │ Please enter a passphrase to protect the new key │
+    │                                                  │
+    │ does not match - try again                       │
+    │ Passphrase: [····]                               │
+    └──────────────────────────────────────────────────┘
+
+  confirm:
+
+    ┌─ gpg · git commit -S @ work:2.0 ───────────────────┐
+    │ An ssh process requested the use of key            │
+    │ SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE │
+    │ (alice@laptop)                                     │
+    │ Do you want to allow this?                         │
+    │                                                    │
+    │ ⏎ Allow   d Deny   esc Cancel                      │
+    └────────────────────────────────────────────────────┘
+
+  message:
+
+    ┌─ gpg · git commit -S @ work:2.0 ─────────┐
+    │ No card found. Insert your OpenPGP card. │
+    │                                          │
+    │ ⏎ OK                                     │
+    └──────────────────────────────────────────┘
+
+  status-line note on the other attached clients:
+
+    pinentry: gpg - prompt open on /dev/pts/15
+
+  in place, outside tmux:
+
+    ~/src/notes $ git commit -S -m 'Fix typo'
+     Please enter the passphrase to unlock the OpenPGP secret key
+     "Alice <alice@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2
+     created 2024-03-01.
+     Passphrase: [••··]
+
 fallback
   - command run in a terminal outside tmux: prompt drawn in place on that
     terminal and erased afterwards, even if a tmux client is attached
@@ -38,3 +124,5 @@ testing
   - PIN_TEST_SHOW=1 cargo test -- --nocapture: print the screen at each step
   - PIN_TEST_LIVE=1 cargo test: replay the tests on this terminal, at its
     size, one at a time, typing slowly (PIN_TEST_SLOW=ms per key, default 120)
+  - cargo test --test screenshots -- --ignored --nocapture --test-threads=1:
+    print the screenshots above
