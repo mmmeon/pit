@@ -46,7 +46,7 @@ fn get_passphrase_through_popup() {
     let child = agent
         .command("gpg-connect-agent")
         .env("GPG_TTY", tmux.pane_tty())
-        .args(["GET_PASSPHRASE --data pinentry-tmux-test X Passphrase: Unlock%20the%20test%20key", "/bye"])
+        .args(["GET_PASSPHRASE --data pit-test X Passphrase: Unlock%20the%20test%20key", "/bye"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -17,7 +17,7 @@ fn check(ret: libc::c_int) -> io::Result<libc::c_int> {
 }
 
 pub fn mkdtemp() -> io::Result<PathBuf> {
-    let template = env::temp_dir().join("pinentry-tmux.XXXXXX");
+    let template = env::temp_dir().join("pit.XXXXXX");
     let mut buf = cstr(&template)?.into_bytes_with_nul();
     if unsafe { libc::mkdtemp(buf.as_mut_ptr().cast()) }.is_null() {
         return Err(io::Error::last_os_error());

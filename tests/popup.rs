@@ -128,7 +128,7 @@ fn echo_options() {
     for (echo, shown) in [("dots", "PIN: •••"), ("none", "PIN:")] {
         let sb = Sandbox::new();
         let mut s = Setup::new(&sb);
-        s.tmux.set("@pinentry-echo", echo);
+        s.tmux.set("@pit-echo", echo);
         s.p.start("GETPIN");
         s.pty().wait_text("PIN:");
         s.pty().send("abc");

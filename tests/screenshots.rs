@@ -119,7 +119,7 @@ fn echoes() {
         let sb = Sandbox::new();
         let d = Desk::new(&sb);
         d.tmux.set("@pinentry-style", "box");
-        d.tmux.set("@pinentry-echo", echo);
+        d.tmux.set("@pit-echo", echo);
         let mut p = d.pinentry();
         p.setup(&["SETDESC Unlock \"Alice <alice@example.org>\"", "SETPROMPT Passphrase:"]);
         p.start("GETPIN");

@@ -2,11 +2,11 @@
 //! to over Assuan, and an isolated tmux server.
 //!
 //! To watch the tests:
-//!   PIN_TEST_SHOW=1 cargo test -- --nocapture
+//!   PIT_TEST_SHOW=1 cargo test -- --nocapture
 //!     prints a snapshot of the screen each time a test waits on it
-//!   PIN_TEST_LIVE=1 cargo test
+//!   PIT_TEST_LIVE=1 cargo test
 //!     replays every pty on this terminal as it's drawn, one test at a time,
-//!     typing slowly (PIN_TEST_SLOW=ms per key, default 120). Ptys take this
+//!     typing slowly (PIT_TEST_SLOW=ms per key, default 120). Ptys take this
 //!     terminal's size, and its echo is off until the tests exit.
 #![allow(dead_code)]
 
@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const BIN: &str = env!("CARGO_BIN_EXE_pinentry-tmux");
+pub const BIN: &str = env!("CARGO_BIN_EXE_pit");
 pub const WAIT: Duration = Duration::from_secs(10);
 
 /// gpg-error codes as the pinentry reports them (source 5 = pinentry).
@@ -48,9 +48,9 @@ fn flag(name: &str) -> bool {
     env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
-/// Whether to print screen snapshots (PIN_TEST_SHOW).
+/// Whether to print screen snapshots (PIT_TEST_SHOW).
 pub fn show() -> bool {
-    flag("PIN_TEST_SHOW")
+    flag("PIT_TEST_SHOW")
 }
 
 /// This terminal's modes before live replay turned echo off.
@@ -74,11 +74,11 @@ extern "C" fn restore_tty_and_die(sig: libc::c_int) {
     }
 }
 
-/// The terminal to replay ptys on (PIN_TEST_LIVE), if any.
+/// The terminal to replay ptys on (PIT_TEST_LIVE), if any.
 fn live() -> Option<&'static Mutex<File>> {
     static TTY: OnceLock<Option<Mutex<File>>> = OnceLock::new();
     TTY.get_or_init(|| {
-        if !flag("PIN_TEST_LIVE") {
+        if !flag("PIT_TEST_LIVE") {
             return None;
         }
         match File::options().read(true).write(true).open("/dev/tty") {
@@ -101,7 +101,7 @@ fn live() -> Option<&'static Mutex<File>> {
                 Some(Mutex::new(tty))
             }
             Err(e) => {
-                eprintln!("PIN_TEST_LIVE: can't open /dev/tty ({e}), not replaying");
+                eprintln!("PIT_TEST_LIVE: can't open /dev/tty ({e}), not replaying");
                 None
             }
         }
@@ -120,7 +120,7 @@ fn live_write(bytes: &[u8]) {
 /// Delay per key when replaying live.
 fn slow() -> Duration {
     let dflt = if live().is_some() { 120 } else { 0 };
-    let ms = env::var("PIN_TEST_SLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(dflt);
+    let ms = env::var("PIT_TEST_SLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(dflt);
     Duration::from_millis(ms)
 }
 
@@ -145,7 +145,7 @@ pub fn have(cmd: &str) -> bool {
 }
 
 /// Polls `f` until it returns Some, or panics with `what` and `dump()`.
-/// With PIN_TEST_SHOW, prints `dump()` once it's satisfied.
+/// With PIT_TEST_SHOW, prints `dump()` once it's satisfied.
 pub fn wait_until<T>(what: &str, f: impl FnMut() -> Option<T>, dump: impl Fn() -> String) -> T {
     poll(what, f, dump, show())
 }
@@ -174,7 +174,7 @@ pub struct Sandbox {
     _turn: Option<MutexGuard<'static, ()>>,
 }
 
-const SANDBOX_PREFIX: &str = "pinentry-tmux-test-";
+const SANDBOX_PREFIX: &str = "pit-test-";
 
 /// Removes sandboxes left by test runs that were killed.
 fn remove_stale_sandboxes() {

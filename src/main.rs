@@ -1,4 +1,4 @@
-//! pinentry-tmux: a pinentry that asks in a tmux popup.
+//! pit: a pinentry that asks in a tmux popup.
 //!
 //! Set it as `pinentry-program` in gpg-agent.conf. It speaks the pinentry
 //! protocol itself, and when a passphrase or confirmation is needed it opens a
@@ -10,7 +10,7 @@
 //!
 //! Styles and echo are picked with tmux options:
 //!   set -g @pinentry-style bar|box|line   (default: bar)
-//!   set -g @pinentry-echo marker|dots|none   (default: marker)
+//!   set -g @pit-echo marker|dots|none   (default: marker)
 
 mod assuan;
 mod gpg;
@@ -32,7 +32,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("pinentry-tmux: {e}");
+            eprintln!("pit: {e}");
             ExitCode::FAILURE
         }
     }

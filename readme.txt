@@ -1,4 +1,4 @@
-pinentry-tmux - gpg-agent pinentry that prompts in a tmux popup
+pit - gpg-agent pinentry that prompts in a tmux popup
 
 tmux
   - popup on the most recently active client, over the current window
@@ -7,7 +7,7 @@ tmux
     "git commit -S @ work:2.1" (from the pid gpg-agent passes as owner)
   - sized to fit the prompt
   - styles: set -g @pinentry-style bar|box|line   (default bar)
-  - echo:   set -g @pinentry-echo marker|dots|none (default marker;
+  - echo:   set -g @pit-echo marker|dots|none (default marker;
             marker changes per key without revealing length)
   - passphrase, repeat/confirm-new-passphrase, confirm and message dialogs
   - wrong-passphrase and mismatch errors shown inline
@@ -121,8 +121,8 @@ testing
   - cargo test: unit tests, plus the binary driven through ptys and an
     isolated tmux server (skipped if tmux isn't installed)
   - cargo test --test gpg_agent -- --ignored: through a real gpg-agent
-  - PIN_TEST_SHOW=1 cargo test -- --nocapture: print the screen at each step
-  - PIN_TEST_LIVE=1 cargo test: replay the tests on this terminal, at its
-    size, one at a time, typing slowly (PIN_TEST_SLOW=ms per key, default 120)
+  - PIT_TEST_SHOW=1 cargo test -- --nocapture: print the screen at each step
+  - PIT_TEST_LIVE=1 cargo test: replay the tests on this terminal, at its
+    size, one at a time, typing slowly (PIT_TEST_SLOW=ms per key, default 120)
   - cargo test --test screenshots -- --ignored --nocapture --test-threads=1:
     print the screenshots above
