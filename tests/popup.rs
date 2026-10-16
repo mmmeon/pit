@@ -397,13 +397,20 @@ fn hash_in_title_is_not_a_tmux_format() {
 }
 
 /// A pinentry asked by the process `name` run by `cmd` in a new window,
-/// with GPG_TTY set to that window's pane.
-fn asked_from_window(s: &mut Setup, cmd: &str, name: &str) -> String {
+/// with GPG_TTY set to that window's pane. Returns the pane and its tty.
+fn asked_from_window(s: &mut Setup, cmd: &str, name: &str) -> (String, String) {
     let (pane, pid) = in_window(&s.tmux, cmd, name);
-    let tty = s.tmux.run(&["display", "-p", "-t", &pane, "#{pane_tty}"]);
-    s.p.setup(&[&format!("OPTION ttyname={}", tty.trim()), &format!("OPTION owner={pid}/{} {}", uid(), hostname())]);
+    let tty = s.tmux.run(&["display", "-p", "-t", &pane, "#{pane_tty}"]).trim().to_string();
+    s.p.setup(&[&format!("OPTION ttyname={tty}"), &format!("OPTION owner={pid}/{} {}", uid(), hostname())]);
     s.p.start("GETPIN");
-    pane
+    (pane, tty)
+}
+
+/// Waits for the prompt in place on `pane`, then types `keys` into it.
+fn answer_in_pane(s: &Setup, pane: &str, keys: &str) {
+    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", pane]);
+    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
+    s.tmux.run(&["send-keys", "-t", pane, keys, "Enter"]);
 }
 
 #[test]
@@ -411,10 +418,8 @@ fn foreground_command_in_a_pane_is_asked_in_place() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    let pane = asked_from_window(&mut s, "sleep 999", "sleep");
-    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", &pane]);
-    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
-    s.tmux.run(&["send-keys", "-t", &pane, "hunter2", "Enter"]);
+    let (pane, _) = asked_from_window(&mut s, "sleep 999", "sleep");
+    answer_in_pane(&s, &pane, "hunter2");
     assert_eq!(s.p.finish(), ["D hunter2", "OK"]);
 }
 
@@ -508,13 +513,9 @@ fn hook_runs_on_inline_open_and_close() {
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
     let log = log_hook(&sb, &s.tmux);
-    let pane = asked_from_window(&mut s, "sleep 999", "sleep");
-    let tty = s.tmux.run(&["display", "-p", "-t", &pane, "#{pane_tty}"]);
-    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", &pane]);
-    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
-    s.tmux.run(&["send-keys", "-t", &pane, "x", "Enter"]);
+    let (pane, tty) = asked_from_window(&mut s, "sleep 999", "sleep");
+    answer_in_pane(&s, &pane, "x");
     assert_eq!(s.p.finish(), ["D x", "OK"]);
-    let tty = tty.trim();
     assert_eq!(hook_lines(&log, 2), [format!("open inline {tty} gpg|sleep 999 @ {pane}"), format!("close inline {tty} gpg|sleep 999 @ {pane}")]);
 }
 
@@ -572,7 +573,7 @@ fn another_reader_in_the_job_is_not_asked_when_the_popup_cant_show() {
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
     s.tmux.run(&["detach-client", "-t", s.pty().path()]);
-    let pane = asked_from_window(&mut s, "cat | sleep 999", "sleep");
+    let (pane, _) = asked_from_window(&mut s, "cat | sleep 999", "sleep");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_NO_PIN_ENTRY));
     assert!(!s.tmux.run(&["capture-pane", "-p", "-t", &pane]).contains("PIN:"));
 }
@@ -583,9 +584,7 @@ fn reader_of_a_pipe_in_the_job_is_fine() {
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
     // Like `gpg ... | tee out`: cat reads the pipe, not the pane.
-    let pane = asked_from_window(&mut s, "sleep 999 | cat", "sleep");
-    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", &pane]);
-    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
-    s.tmux.run(&["send-keys", "-t", &pane, "x", "Enter"]);
+    let (pane, _) = asked_from_window(&mut s, "sleep 999 | cat", "sleep");
+    answer_in_pane(&s, &pane, "x");
     assert_eq!(s.p.finish(), ["D x", "OK"]);
 }
