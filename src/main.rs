@@ -8,11 +8,10 @@
 //! with this at the top of ~/.ssh/config:
 //!   Match host * exec "GPG_TTY=$(tty <&2) gpg-connect-agent UPDATESTARTUPTTY /bye >/dev/null"
 //!
-//! Styles and echo are picked with tmux options:
-//!   set -g @pinentry-style bar|box|line   (default: bar)
-//!   set -g @pit-echo marker|dots|none   (default: marker)
+//! Settings are in ~/.config/pit/config.toml; see config.rs.
 
 mod assuan;
+mod config;
 mod gpg;
 mod origin;
 mod sys;

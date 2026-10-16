@@ -7,9 +7,10 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::config::Hook;
 use crate::origin;
 use crate::sys;
 use crate::ui::{self, Layout, Outcome, Request, Secret, Style};
@@ -106,60 +107,20 @@ fn notify_others(client: &Client, title: &str) {
     }
 }
 
-/// The user's `@pit-hook` command, run for a prompt opening and then, once
-/// this is dropped or the process dies, closing.
-pub struct Hook(Option<Child>);
-
-impl Hook {
-    /// Runs `@pit-hook`, if set, for a prompt opening at `place`. In the
-    /// background: it never holds up the prompt. One shell runs both events,
-    /// so close never comes before open is done.
-    pub fn open(req: &Request, place: &str) -> Hook {
-        let Some(cmd) = option("@pit-hook") else { return Hook(None) };
-        const BOTH: &str = r#"PIT_EVENT=open sh -c "$1" </dev/null; read -r x; PIT_EVENT=close exec sh -c "$1" </dev/null"#;
-        let child = Command::new("sh")
-            .args(["-c", BOTH, "sh", &cmd])
-            .env("PIT_TITLE", &req.title)
-            .env("PIT_ORIGIN", &req.origin)
-            .env("PIT_WHERE", place)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        Hook(child.ok())
-    }
-}
-
-impl Drop for Hook {
-    fn drop(&mut self) {
-        // The end of its stdin says the prompt closed.
-        if let Some(mut child) = self.0.take() {
-            drop(child.stdin.take());
-            std::thread::spawn(move || child.wait());
-        }
-    }
-}
-
-/// A global tmux user option, e.g. `@pinentry-style`.
-pub fn option(name: &str) -> Option<String> {
-    let v = tmux(&["show-options", "-gqv", name])?;
-    let v = v.trim();
-    (!v.is_empty()).then(|| v.to_string())
-}
-
 fn shell_quote(s: &[u8]) -> String {
     format!("'{}'", String::from_utf8_lossy(s).replace('\'', r"'\''"))
 }
 
-/// Asks in a popup on `client`. None means the popup couldn't be shown.
-pub fn prompt(client: &Client, req: &Request, lay: &Layout) -> io::Result<Option<Outcome>> {
+/// Asks in a popup on `client`, running the `hook` command while it's up.
+/// None means the popup couldn't be shown.
+pub fn prompt(client: &Client, req: &Request, lay: &Layout, hook: Option<&str>) -> io::Result<Option<Outcome>> {
     let dir = sys::mkdtemp()?;
-    let outcome = popup(client, req, lay, &dir);
+    let outcome = popup(client, req, lay, hook, &dir);
     let _ = fs::remove_dir_all(&dir);
     outcome
 }
 
-fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result<Option<Outcome>> {
+fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, dir: &Path) -> io::Result<Option<Outcome>> {
     fs::write(dir.join("req"), req.encode())?;
     sys::mkfifo(&dir.join("resp"))?;
     sys::mkfifo(&dir.join("ctl"))?;
@@ -216,7 +177,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
                 // clients may be other people, and command lines can hold
                 // secrets.
                 notify_others(client, &req.title);
-                hook = Some(Hook::open(req, &format!("popup {}", client.tty)));
+                hook = Some(Hook::open(hook_cmd, req, &format!("popup {}", client.tty)));
             }
             ready = true;
             continue;

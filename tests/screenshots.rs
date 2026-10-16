@@ -99,7 +99,7 @@ fn styles() {
     for style in ["bar", "box", "line"] {
         let sb = Sandbox::new();
         let d = Desk::new(&sb);
-        d.tmux.set("@pinentry-style", style);
+        sb.config(&format!("[tmux]\nstyle = \"{style}\""));
         let mut p = d.pinentry();
         p.setup(&[DESC, "SETPROMPT Passphrase:"]);
         p.start("GETPIN");
@@ -118,8 +118,7 @@ fn echoes() {
     for echo in ["marker", "dots", "none"] {
         let sb = Sandbox::new();
         let d = Desk::new(&sb);
-        d.tmux.set("@pinentry-style", "box");
-        d.tmux.set("@pit-echo", echo);
+        sb.config(&format!("echo = \"{echo}\"\n[tmux]\nstyle = \"box\""));
         let mut p = d.pinentry();
         p.setup(&["SETDESC Unlock \"Alice <alice@example.org>\"", "SETPROMPT Passphrase:"]);
         p.start("GETPIN");
@@ -137,7 +136,7 @@ fn echoes() {
 fn dialogs() {
     let sb = Sandbox::new();
     let d = Desk::new(&sb);
-    d.tmux.set("@pinentry-style", "box");
+    sb.config("[tmux]\nstyle = \"box\"");
     let pty = &d.client.pty;
     let shot = |name: &str| {
         settle();

@@ -82,7 +82,7 @@ fn box_popup_is_centred() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    s.tmux.set("@pinentry-style", "box");
+    sb.config("[tmux]\nstyle = \"box\"");
     s.p.setup(&[DESC, "SETTITLE Unlock"]);
     s.p.start("GETPIN");
     let screen = s.pty().wait_text("PIN:");
@@ -108,7 +108,7 @@ fn line_popup_puts_summary_in_title() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    s.tmux.set("@pinentry-style", "line");
+    sb.config("[tmux]\nstyle = \"line\"");
     s.p.setup(&[DESC, "SETTITLE Unlock"]);
     s.p.start("GETPIN");
     let screen = s.pty().wait_text("PIN:");
@@ -128,7 +128,7 @@ fn echo_options() {
     for (echo, shown) in [("dots", "PIN: •••"), ("none", "PIN:")] {
         let sb = Sandbox::new();
         let mut s = Setup::new(&sb);
-        s.tmux.set("@pit-echo", echo);
+        sb.config(&format!("echo = \"{echo}\""));
         s.p.start("GETPIN");
         s.pty().wait_text("PIN:");
         s.pty().send("abc");
@@ -428,7 +428,7 @@ fn inline_can_be_turned_off() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    s.tmux.set("@pit-inline", "never");
+    sb.config("[tmux]\ninline = \"never\"");
     asked_from_window(&mut s, "sleep 999", "sleep");
     s.pty().wait_text("PIN:");
     s.pty().send("\x1b");
@@ -474,11 +474,15 @@ fn terminal_in_raw_mode_outside_tmux_gets_a_popup() {
     assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
 }
 
-/// Points `@pit-hook` at a log of its events. Returns the log's path.
-fn log_hook(sb: &Sandbox, tmux: &Tmux) -> std::path::PathBuf {
+/// Points the hook at a log of its events. Returns the log's path.
+fn log_hook(sb: &Sandbox) -> std::path::PathBuf {
     let log = sb.tmp().join("hook.log");
-    tmux.set("@pit-hook", &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE|$PIT_ORIGIN\" >> {}", log.display()));
+    hook(sb, &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE|$PIT_ORIGIN\" >> {}", log.display()));
     log
+}
+
+fn hook(sb: &Sandbox, cmd: &str) {
+    sb.config(&format!("hook = '''{cmd}'''"));
 }
 
 /// The log once it has `n` lines, removed so the sandbox ends empty.
@@ -497,7 +501,7 @@ fn hook_runs_on_popup_open_and_close() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    let log = log_hook(&sb, &s.tmux);
+    let log = log_hook(&sb);
     s.p.setup(&["SETTITLE Unlock"]);
     s.p.start("GETPIN");
     s.pty().wait_text("PIN:");
@@ -512,7 +516,7 @@ fn hook_runs_on_inline_open_and_close() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    let log = log_hook(&sb, &s.tmux);
+    let log = log_hook(&sb);
     let (pane, tty) = asked_from_window(&mut s, "sleep 999", "sleep");
     answer_in_pane(&s, &pane, "x");
     assert_eq!(s.p.finish(), ["D x", "OK"]);
@@ -526,7 +530,7 @@ fn hook_closes_after_a_slow_open() {
     let mut s = Setup::new(&sb);
     let log = sb.tmp().join("hook.log");
     let cmd = format!("[ \"$PIT_EVENT\" = open ] && sleep 1; echo $PIT_EVENT >> {}", log.display());
-    s.tmux.set("@pit-hook", &cmd);
+    hook(&sb, &cmd);
     s.p.start("GETPIN");
     s.pty().wait_text("PIN:");
     s.pty().send("\x1b");
@@ -541,7 +545,7 @@ fn slow_hook_does_not_hold_up_the_prompt() {
     let mut s = Setup::new(&sb);
     let pid = sb.tmp().join("hook.pid");
     let cmd = format!("[ \"$PIT_EVENT\" = open ] || exit 0; echo $$ > {}; exec sleep 100", pid.display());
-    s.tmux.set("@pit-hook", &cmd);
+    hook(&sb, &cmd);
     let start = Instant::now();
     s.p.start("GETPIN");
     s.pty().wait_text("PIN:");
@@ -587,4 +591,27 @@ fn reader_of_a_pipe_in_the_job_is_fine() {
     let (pane, _) = asked_from_window(&mut s, "sleep 999 | cat", "sleep");
     answer_in_pane(&s, &pane, "x");
     assert_eq!(s.p.finish(), ["D x", "OK"]);
+}
+
+#[test]
+fn inline_off_is_not_asked_in_the_pane_when_the_popup_cant_show() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    sb.config("[tmux]\ninline = \"never\"");
+    s.tmux.run(&["detach-client", "-t", s.pty().path()]);
+    let (pane, _) = asked_from_window(&mut s, "sleep 999", "sleep");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_NO_PIN_ENTRY));
+    assert!(!s.tmux.run(&["capture-pane", "-p", "-t", &pane]).contains("PIN:"));
+}
+
+#[test]
+fn full_screen_program_is_not_asked_when_the_popup_cant_show() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    s.tmux.run(&["detach-client", "-t", s.pty().path()]);
+    let (pane, _) = asked_from_window(&mut s, "printf '\\033[?1049h'; sleep 999", "sleep");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_NO_PIN_ENTRY));
+    assert!(!s.tmux.run(&["capture-pane", "-p", "-t", &pane]).contains("PIN:"));
 }

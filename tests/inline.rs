@@ -135,6 +135,18 @@ fn marker_hides_length() {
 }
 
 #[test]
+fn echo_setting_applies() {
+    let (sb, pty, mut p) = setup();
+    sb.config("echo = \"dots\"");
+    p.start("GETPIN");
+    let row = input_row(&pty, "PIN:");
+    pty.send("abc");
+    pty.wait("dots", |_| input_text(&pty, row) == " PIN: •••");
+    pty.send("\r");
+    assert_eq!(data(&p.finish()), b"abc");
+}
+
+#[test]
 fn error_shown_in_red_for_one_dialog() {
     let (_sb, pty, mut p) = setup();
     p.setup(&["SETDESC Unlock", "SETERROR Bad passphrase (try 2 of 3)"]);

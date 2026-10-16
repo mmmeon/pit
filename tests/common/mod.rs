@@ -209,12 +209,20 @@ impl Sandbox {
         self.root.join("tmp")
     }
 
-    /// Points `cmd` at this sandbox's tmux server and TMPDIR.
+    /// Points `cmd` at this sandbox's tmux server, TMPDIR and config.
     pub fn apply<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
         cmd.env_remove("TMUX")
             .env_remove("TMUX_PANE")
             .env("TMUX_TMPDIR", self.root.join("tmux"))
             .env("TMPDIR", self.tmp())
+            .env("XDG_CONFIG_HOME", self.root.join("config"))
+    }
+
+    /// Writes the pinentry's config file.
+    pub fn config(&self, toml: &str) {
+        let dir = self.root.join("config/pit");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.toml"), toml).unwrap();
     }
 
     pub fn leftovers(&self) -> Vec<String> {

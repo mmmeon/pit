@@ -6,6 +6,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::process;
 
+use crate::config::{Config, Hook};
 use crate::gpg;
 use crate::origin;
 use crate::sys;
@@ -125,7 +126,9 @@ impl State {
 
     /// Asks the user. None means there's nowhere to ask.
     fn ask(&mut self, kind: Kind) -> io::Result<Option<Outcome>> {
+        let cfg = Config::load();
         let mut req = self.request(kind);
+        req.echo = cfg.echo;
         // gpg's own descriptions quote the user ID; ssh's may only give the
         // fingerprint.
         // Card PIN prompts give neither, only the card's number.
@@ -163,7 +166,7 @@ impl State {
         // place, right under it, as on an ordinary terminal.
         if tty.is_none()
             && let (Some(t), Some(pid)) = (self.ttyname.as_deref(), self.owner)
-            && tmux::option("@pit-inline").as_deref() != Some("never")
+            && cfg.inline
             && origin::in_foreground(pid, t)
             && tmux::pane_idle(t)
         {
@@ -173,12 +176,10 @@ impl State {
         if tty.is_none()
             && let Some(client) = tmux::find_client()
         {
-            let opt = |name| tmux::option(name);
-            req.style = opt("@pinentry-style").and_then(|s| Style::parse(&s)).unwrap_or_default();
-            req.echo = opt("@pit-echo").and_then(|s| Echo::parse(&s)).unwrap_or_default();
+            req.style = cfg.style;
             let lay = ui::layout(&req, client.width.saturating_sub(4));
             req.width = lay.width;
-            if let Some(outcome) = tmux::prompt(&client, &req, &lay)? {
+            if let Some(outcome) = tmux::prompt(&client, &req, &lay, cfg.hook.as_deref())? {
                 return Ok(Some(outcome));
             }
         }
@@ -190,6 +191,12 @@ impl State {
             Some(tty) => tty,
             None => {
                 let Some(ttyname) = &self.ttyname else { return Ok(None) };
+                // A pane only on the terms above, short of the command being
+                // in the foreground: never when inline prompts are off, nor
+                // over something full-screen.
+                if outside.is_none() && !(cfg.inline && tmux::pane_idle(ttyname)) {
+                    return Ok(None);
+                }
                 let tty = open(ttyname)?;
                 if !free(&tty) {
                     return Ok(None);
@@ -200,7 +207,7 @@ impl State {
         req.style = Style::Bar;
         req.width = sys::winsize(tty.as_raw_fd()).map_or(78, |(cols, _)| cols).saturating_sub(2);
         let place = format!("inline {}", self.ttyname.as_deref().unwrap_or_default());
-        let hook = tmux::Hook::open(&req, &place);
+        let hook = Hook::open(cfg.hook.as_deref(), &req, &place);
         let outcome = ui::run(&tty, &req, None, true);
         drop(hook);
         outcome.map(Some)
