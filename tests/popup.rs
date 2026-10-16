@@ -452,3 +452,19 @@ fn background_job_gets_a_popup() {
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
 }
+
+#[test]
+fn terminal_in_raw_mode_outside_tmux_gets_a_popup() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let tmux = Tmux::start(&sb);
+    let client = tmux.attach(30, 100);
+    let term = Pty::term(24, 80);
+    term.raw();
+    let mut p = Pinentry::spawn(&sb, &["--ttyname", term.path()]);
+    p.start("GETPIN");
+    client.pty.wait_text("PIN:");
+    assert!(!term.text().contains("PIN:"));
+    client.pty.send("\x1b");
+    assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
+}

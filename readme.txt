@@ -14,7 +14,10 @@ tmux
             instead of in a popup, when that command is in the foreground
             of its own pane and nothing full-screen is showing there.
             never always uses the popup in panes. Either way, a terminal
-            outside tmux is always asked inline, even with tmux running.
+            outside tmux is asked inline, even with tmux running.
+            A terminal in raw mode (a full-screen program reading keys) is
+            never asked: it could take some of the passphrase. Outside
+            tmux that means the popup, or no prompt if no client is attached.
   - passphrase, repeat/confirm-new-passphrase, confirm and message dialogs
   - wrong-passphrase and mismatch errors shown inline
   - prompts that only give a fingerprint (ssh keys without a comment) get

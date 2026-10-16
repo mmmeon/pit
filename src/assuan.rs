@@ -141,7 +141,9 @@ impl State {
         // there, not in tmux, even if a tmux client is attached elsewhere.
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
         let outside = self.ttyname.as_deref().filter(|t| !tmux::owns_tty(t));
-        let mut tty = outside.and_then(|t| open(t).ok());
+        // Only if nothing else has it, though: with a full-screen program
+        // up there, the popup is better, and it falls back to here.
+        let mut tty = outside.and_then(|t| open(t).ok()).filter(|t| sys::line_mode(t.as_raw_fd()));
         // In a pane, the command that asked may still have it to itself:
         // nothing else in the foreground, nothing on the screen. Then ask in
         // place, right under it, as on an ordinary terminal.
@@ -151,7 +153,7 @@ impl State {
             && origin::in_foreground(pid, t)
             && tmux::pane_idle(t)
         {
-            tty = open(t).ok();
+            tty = open(t).ok().filter(|t| sys::line_mode(t.as_raw_fd()));
         }
 
         if tty.is_none()
@@ -174,6 +176,11 @@ impl State {
         if tty.is_none() {
             let Some(ttyname) = &self.ttyname else { return Ok(None) };
             tty = Some(open(ttyname)?);
+        }
+        // Something else is reading keys there: it would get some of them,
+        // and they're a passphrase. Better to not ask at all.
+        if !tty.as_ref().is_some_and(|t| sys::line_mode(t.as_raw_fd())) {
+            return Ok(None);
         }
         let tty = tty.unwrap();
         req.style = Style::Bar;
@@ -212,7 +219,7 @@ fn data(out: &mut impl Write, value: &[u8]) -> io::Result<()> {
 fn no_pinentry(e: Option<io::Error>) -> Result<(), Failure> {
     match e {
         Some(e) => fail(ERR_NO_PIN_ENTRY, &format!("No pinentry ({e})")),
-        None => fail(ERR_NO_PIN_ENTRY, "No pinentry (not in tmux and no tty)"),
+        None => fail(ERR_NO_PIN_ENTRY, "No pinentry (not in tmux, and no tty or it is in use)"),
     }
 }
 

@@ -59,6 +59,14 @@ pub fn winsize(fd: RawFd) -> Option<(usize, usize)> {
     ok.then_some((ws.ws_col as usize, ws.ws_row as usize))
 }
 
+/// Whether the terminal on `fd` reads whole lines, as a shell leaves it for
+/// the command it runs. A full-screen program turns that off to take keys
+/// one at a time, and then owns the screen.
+pub fn line_mode(fd: RawFd) -> bool {
+    let mut t: libc::termios = unsafe { std::mem::zeroed() };
+    unsafe { libc::tcgetattr(fd, &mut t) == 0 && t.c_lflag & libc::ICANON != 0 }
+}
+
 pub fn uid() -> u32 {
     unsafe { libc::getuid() }
 }

@@ -365,6 +365,15 @@ impl Pty {
         [t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag]
     }
 
+    /// Turns off line mode, as a full-screen program does.
+    pub fn raw(&self) {
+        let fd = self.slave.as_raw_fd();
+        let mut t: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(fd, &mut t) }, 0);
+        t.c_lflag &= !(libc::ICANON | libc::ECHO);
+        assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) }, 0);
+    }
+
     /// A Command that runs on this pty as its controlling terminal.
     pub fn command(&self, program: &str) -> Command {
         let mut cmd = Command::new(program);

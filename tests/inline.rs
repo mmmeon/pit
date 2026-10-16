@@ -251,3 +251,13 @@ fn narrow_terminal_wraps_description() {
     let screen = pty.wait_gone("PIN:");
     assert_eq!(screen.contents().trim(), "");
 }
+
+#[test]
+fn terminal_in_raw_mode_is_not_asked() {
+    // A full-screen program there would take some of the keys.
+    let (_sb, pty, mut p) = setup();
+    pty.raw();
+    p.start("GETPIN");
+    assert_eq!(err_code(&p.finish()), Some(ERR_NO_PIN_ENTRY));
+    assert!(!pty.text().contains("PIN:"));
+}
