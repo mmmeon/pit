@@ -7,7 +7,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::origin;
@@ -106,22 +106,37 @@ fn notify_others(client: &Client, title: &str) {
     }
 }
 
-/// Runs the user's `@pit-hook` command, if set, for a prompt opening or
-/// closing at `place`. In the background: it never holds up the prompt.
-pub fn hook(event: &str, req: &Request, place: &str) {
-    let Some(cmd) = option("@pit-hook") else { return };
-    let child = Command::new("sh")
-        .args(["-c", &cmd])
-        .env("PIT_EVENT", event)
-        .env("PIT_TITLE", &req.title)
-        .env("PIT_ORIGIN", &req.origin)
-        .env("PIT_WHERE", place)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    if let Ok(mut child) = child {
-        std::thread::spawn(move || child.wait());
+/// The user's `@pit-hook` command, run for a prompt opening and then, once
+/// this is dropped or the process dies, closing.
+pub struct Hook(Option<Child>);
+
+impl Hook {
+    /// Runs `@pit-hook`, if set, for a prompt opening at `place`. In the
+    /// background: it never holds up the prompt. One shell runs both events,
+    /// so close never comes before open is done.
+    pub fn open(req: &Request, place: &str) -> Hook {
+        let Some(cmd) = option("@pit-hook") else { return Hook(None) };
+        const BOTH: &str = r#"PIT_EVENT=open sh -c "$1" </dev/null; read -r x; PIT_EVENT=close exec sh -c "$1" </dev/null"#;
+        let child = Command::new("sh")
+            .args(["-c", BOTH, "sh", &cmd])
+            .env("PIT_TITLE", &req.title)
+            .env("PIT_ORIGIN", &req.origin)
+            .env("PIT_WHERE", place)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        Hook(child.ok())
+    }
+}
+
+impl Drop for Hook {
+    fn drop(&mut self) {
+        // The end of its stdin says the prompt closed.
+        if let Some(mut child) = self.0.take() {
+            drop(child.stdin.take());
+            std::thread::spawn(move || child.wait());
+        }
     }
 }
 
@@ -174,6 +189,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
     let start = Instant::now();
     let mut buf = Secret::new();
     let mut ready = false;
+    let mut hook = None;
     let outcome = loop {
         let exited = !matches!(popup.try_wait(), Ok(None));
         let readable = match sys::poll(&[resp.as_raw_fd()], Some(Duration::from_millis(100))) {
@@ -200,7 +216,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
                 // clients may be other people, and command lines can hold
                 // secrets.
                 notify_others(client, &req.title);
-                hook("open", req, &format!("popup {}", client.tty));
+                hook = Some(Hook::open(req, &format!("popup {}", client.tty)));
             }
             ready = true;
             continue;
@@ -217,9 +233,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
     };
     drop(ctl);
     let _ = popup.wait();
-    if ready {
-        hook("close", req, &format!("popup {}", client.tty));
-    }
+    drop(hook);
     outcome
 }
 

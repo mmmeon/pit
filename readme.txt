@@ -23,8 +23,8 @@ tmux
             from elsewhere), when gpg-agent says who asked. Not caught: one
             that opens /dev/tty itself without raw mode, which is rare.
   - hook:   set -g @pit-hook '<command>'
-            run with sh when a prompt opens and closes, in the background,
-            with PIT_EVENT (open|close), PIT_TITLE, PIT_ORIGIN (the
+            run with sh when a prompt opens and closes (once the open run
+            is done), in the background, with PIT_EVENT (open|close), PIT_TITLE, PIT_ORIGIN (the
             command and pane that asked) and PIT_WHERE ("popup <client
             tty>" or "inline <tty>"); never the passphrase. e.g.
               set -g @pit-hook '[ "$PIT_EVENT" = open ] &&

@@ -199,9 +199,9 @@ impl State {
         req.style = Style::Bar;
         req.width = sys::winsize(tty.as_raw_fd()).map_or(78, |(cols, _)| cols).saturating_sub(2);
         let place = format!("inline {}", self.ttyname.as_deref().unwrap_or_default());
-        tmux::hook("open", &req, &place);
+        let hook = tmux::Hook::open(&req, &place);
         let outcome = ui::run(&tty, &req, None, true);
-        tmux::hook("close", &req, &place);
+        drop(hook);
         outcome.map(Some)
     }
 }

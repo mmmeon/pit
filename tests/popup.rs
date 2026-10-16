@@ -519,6 +519,21 @@ fn hook_runs_on_inline_open_and_close() {
 }
 
 #[test]
+fn hook_closes_after_a_slow_open() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let log = sb.tmp().join("hook.log");
+    let cmd = format!("[ \"$PIT_EVENT\" = open ] && sleep 1; echo $PIT_EVENT >> {}", log.display());
+    s.tmux.set("@pit-hook", &cmd);
+    s.p.start("GETPIN");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+    assert_eq!(hook_lines(&log, 2), ["open", "close"]);
+}
+
+#[test]
 fn slow_hook_does_not_hold_up_the_prompt() {
     require_tmux!();
     let sb = Sandbox::new();
