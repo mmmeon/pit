@@ -128,7 +128,7 @@ impl State {
         // gpg's own descriptions quote the user ID; ssh's may only give the
         // fingerprint.
         if !req.desc.contains('"')
-            && let Some(name) = self.keyinfo.as_deref().and_then(gpg::key_name)
+            && let Some(name) = self.keyinfo.as_deref().and_then(gpg::key_name).or_else(|| gpg::card_name(&req.desc))
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }

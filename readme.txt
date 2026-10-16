@@ -29,6 +29,8 @@ tmux
   - wrong-passphrase and mismatch errors shown inline
   - prompts that only give a fingerprint (ssh keys without a comment) get
     the key's OpenPGP user ID next to it, if gpg knows the keygrip
+  - smartcard PIN prompts, which only give the card number, get the user
+    ID of the key with subkeys on that card
   - enter submits, esc/ctrl-c cancels, backspace deletes, ctrl-u clears;
     button mnemonics in confirm dialogs
   - honours gpg-agent's pinentry timeout
