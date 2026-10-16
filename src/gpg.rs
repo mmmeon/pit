@@ -104,7 +104,7 @@ fn card_number(desc: &str) -> Option<String> {
         .find_map(|l| l.trim().replace('\u{1f}', "").strip_prefix("Number:").map(String::from))?
         .split_whitespace()
         .collect();
-    (number.len() >= 8 && number.bytes().all(|b| b.is_ascii_hexdigit())).then_some(number)
+    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_hexdigit())).then_some(number)
 }
 
 /// The `--homedir` gpg-agent, our parent, was started with. It needn't be in
