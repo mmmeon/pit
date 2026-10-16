@@ -3,16 +3,20 @@
 //! the card it's on (smartcard PIN prompts).
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::ui::Secret;
 use crate::{origin, sys};
 
 /// Never hold up the prompt for long just to name the key.
 const TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Most of a key file looked at: stubs are well under this.
+const MAX_KEY_FILE: usize = 64 * 1024;
 
 /// The user ID of the OpenPGP key holding the keygrip in a SETKEYINFO
 /// argument ("n/GRIP"), if gpg knows it.
@@ -37,7 +41,7 @@ pub fn card_name(desc: &str) -> Option<String> {
         .flatten()
         .filter_map(|e| {
             let grip = e.file_name().to_str()?.strip_suffix(".key")?.to_string();
-            let serial = token(BufReader::new(File::open(e.path()).ok()?))?;
+            let serial = token(&read_key(&e.path())?.0)?;
             on_card(&serial, &number).then_some(grip)
         })
         .collect();
@@ -45,15 +49,32 @@ pub fn card_name(desc: &str) -> Option<String> {
     grips.iter().find_map(|g| key_name(&format!("n/{g}")))
 }
 
-/// The card serial number in a key file's `Token:` line, if it's a stub
-/// for a key on a card. Stops at a real key: no need to read it.
-fn token(key: impl BufRead) -> Option<String> {
-    for line in key.lines() {
-        let line = line.ok()?;
-        if let Some(t) = line.strip_prefix("Token: ") {
-            return t.split(' ').next().map(String::from);
+/// The start of a key file, wiped when dropped: it may be a real key, and
+/// not even protected.
+fn read_key(path: &Path) -> Option<Secret> {
+    let mut file = File::open(path).ok()?;
+    let mut buf = Secret(vec![0; MAX_KEY_FILE]);
+    let mut n = 0;
+    while n < buf.0.len() {
+        match file.read(&mut buf.0[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(_) => return None,
         }
-        if line.starts_with("Key: ") && !line.starts_with("Key: (shadowed-private-key") {
+    }
+    buf.0.truncate(n);
+    Some(buf)
+}
+
+/// The card serial number in a key file's `Token:` line, if it's a stub
+/// for a key on a card. Stops at a real key: no need to look at it.
+fn token(key: &[u8]) -> Option<String> {
+    for line in key.split(|&b| b == b'\n') {
+        if let Some(t) = line.strip_prefix(b"Token: ") {
+            let serial = t.split(|&b| b == b' ').next()?;
+            return std::str::from_utf8(serial).ok().map(String::from);
+        }
+        if line.starts_with(b"Key: ") && !line.starts_with(b"Key: (shadowed-private-key") {
             return None;
         }
     }
