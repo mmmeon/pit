@@ -24,11 +24,14 @@ tmux
             that opens /dev/tty itself without raw mode, which is rare.
   - hook:   set -g @pit-hook '<command>'
             run with sh when a prompt opens and closes (once the open run
-            is done), in the background, with PIT_EVENT (open|close), PIT_TITLE, PIT_ORIGIN (the
-            command and pane that asked) and PIT_WHERE ("popup <client
-            tty>" or "inline <tty>"); never the passphrase. e.g.
+            is done), in the background, with PIT_EVENT (open|close),
+            PIT_TITLE, PIT_ORIGIN (the command and pane that asked) and
+            PIT_WHERE ("popup <client tty>" or "inline <tty>"); never the
+            passphrase. A command line can hold secrets, though, so think
+            twice before sending PIT_ORIGIN anywhere that keeps or shows it
+            (a notification history, a lock screen). e.g.
               set -g @pit-hook '[ "$PIT_EVENT" = open ] &&
-                notify-send "gpg wants a passphrase" "$PIT_ORIGIN"'
+                notify-send "gpg wants a passphrase" "$PIT_TITLE"'
   - passphrase, repeat/confirm-new-passphrase, confirm and message dialogs
   - wrong-passphrase and mismatch errors shown inline
   - prompts that only give a fingerprint (ssh keys without a comment) get
