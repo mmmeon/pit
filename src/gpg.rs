@@ -23,10 +23,15 @@ const MAX_KEY_FILE: usize = 64 * 1024;
 /// argument ("n/GRIP"), if gpg knows it.
 pub fn key_name(keyinfo: &str) -> Option<String> {
     let (_, grip) = keyinfo.split_once('/')?;
+    grip_name(grip, Instant::now() + TIMEOUT)
+}
+
+/// The user ID of the OpenPGP key holding `grip`, if gpg says by `deadline`.
+fn grip_name(grip: &str, deadline: Instant) -> Option<String> {
     if grip.len() != 40 || !grip.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    let listing = colons(&["--list-keys", "--", &format!("&{grip}")])?;
+    let listing = colons(&["--list-keys", "--", &format!("&{grip}")], deadline)?;
     user_id(&String::from_utf8_lossy(&listing))
 }
 
@@ -47,7 +52,9 @@ pub fn card_name(desc: &str) -> Option<String> {
         })
         .collect();
     grips.sort();
-    grips.iter().find_map(|g| key_name(&format!("n/{g}")))
+    // A card holds a few keys: TIMEOUT is for them all.
+    let deadline = Instant::now() + TIMEOUT;
+    grips.iter().find_map(|g| grip_name(g, deadline))
 }
 
 /// The start of a key file, wiped when dropped: it may be a real key, and
@@ -131,8 +138,11 @@ fn homedir() -> Option<String> {
         .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.gnupg")))
 }
 
-/// Runs gpg with `--with-colons` and `args`, within TIMEOUT.
-fn colons(args: &[&str]) -> Option<Vec<u8>> {
+/// Runs gpg with `--with-colons` and `args`, if it's done by `deadline`.
+fn colons(args: &[&str], deadline: Instant) -> Option<Vec<u8>> {
+    if Instant::now() >= deadline {
+        return None;
+    }
     let mut gpg = Command::new("gpg");
     // It finds GNUPGHOME and ~/.gnupg itself. Spelt out, ~/.gnupg can look
     // like another home to it, with its own sockets and daemons.
@@ -148,7 +158,6 @@ fn colons(args: &[&str]) -> Option<Vec<u8>> {
         .spawn()
         .ok()?;
     let mut out = child.stdout.take()?;
-    let deadline = Instant::now() + TIMEOUT;
     let (mut buf, mut chunk) = (Vec::new(), [0; 4096]);
     let done = loop {
         let Some(left) = deadline.checked_duration_since(Instant::now()) else { break false };
