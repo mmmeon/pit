@@ -102,6 +102,25 @@ fn notify_others(client: &Client, title: &str) {
     }
 }
 
+/// Runs the user's `@pit-hook` command, if set, for a prompt opening or
+/// closing at `place`. In the background: it never holds up the prompt.
+pub fn hook(event: &str, req: &Request, place: &str) {
+    let Some(cmd) = option("@pit-hook") else { return };
+    let child = Command::new("sh")
+        .args(["-c", &cmd])
+        .env("PIT_EVENT", event)
+        .env("PIT_TITLE", &req.title)
+        .env("PIT_ORIGIN", &req.origin)
+        .env("PIT_WHERE", place)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Ok(mut child) = child {
+        std::thread::spawn(move || child.wait());
+    }
+}
+
 /// A global tmux user option, e.g. `@pinentry-style`.
 pub fn option(name: &str) -> Option<String> {
     let v = tmux(&["show-options", "-gqv", name])?;
@@ -170,6 +189,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
                 // clients may be other people, and command lines can hold
                 // secrets.
                 notify_others(client, &req.title);
+                hook("open", req, &format!("popup {}", client.tty));
             }
             ready = true;
             continue;
@@ -186,6 +206,9 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
     };
     drop(ctl);
     let _ = popup.wait();
+    if ready {
+        hook("close", req, &format!("popup {}", client.tty));
+    }
     Ok(outcome)
 }
 

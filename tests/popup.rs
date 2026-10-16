@@ -468,3 +468,66 @@ fn terminal_in_raw_mode_outside_tmux_gets_a_popup() {
     client.pty.send("\x1b");
     assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
 }
+
+/// Points `@pit-hook` at a log of its events. Returns the log's path.
+fn log_hook(sb: &Sandbox, tmux: &Tmux) -> std::path::PathBuf {
+    let log = sb.tmp().join("hook.log");
+    tmux.set("@pit-hook", &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE\" >> {}", log.display()));
+    log
+}
+
+/// The log once it has `n` lines, removed so the sandbox ends empty.
+fn hook_lines(log: &std::path::Path, n: usize) -> Vec<String> {
+    let read = || std::fs::read_to_string(log).unwrap_or_default();
+    let lines = wait_until("hook", || {
+        let l: Vec<String> = read().lines().map(Into::into).collect();
+        (l.len() >= n).then_some(l)
+    }, read);
+    std::fs::remove_file(log).unwrap();
+    lines
+}
+
+#[test]
+fn hook_runs_on_popup_open_and_close() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let log = log_hook(&sb, &s.tmux);
+    s.p.setup(&["SETTITLE Unlock"]);
+    s.p.start("GETPIN");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+    let tty = s.pty().path();
+    assert_eq!(hook_lines(&log, 2), [format!("open popup {tty} Unlock"), format!("close popup {tty} Unlock")]);
+}
+
+#[test]
+fn hook_runs_on_inline_open_and_close() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let log = log_hook(&sb, &s.tmux);
+    let pane = asked_from_window(&mut s, "sleep 999", "sleep");
+    let tty = s.tmux.run(&["display", "-p", "-t", &pane, "#{pane_tty}"]);
+    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", &pane]);
+    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
+    s.tmux.run(&["send-keys", "-t", &pane, "x", "Enter"]);
+    assert_eq!(s.p.finish(), ["D x", "OK"]);
+    let tty = tty.trim();
+    assert_eq!(hook_lines(&log, 2), [format!("open inline {tty} gpg"), format!("close inline {tty} gpg")]);
+}
+
+#[test]
+fn slow_hook_does_not_hold_up_the_prompt() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    s.tmux.set("@pit-hook", "sleep 100");
+    let start = Instant::now();
+    s.p.start("GETPIN");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+    assert!(start.elapsed() < Duration::from_secs(10));
+}

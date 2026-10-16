@@ -18,6 +18,13 @@ tmux
             A terminal in raw mode (a full-screen program reading keys) is
             never asked: it could take some of the passphrase. Outside
             tmux that means the popup, or no prompt if no client is attached.
+  - hook:   set -g @pit-hook '<command>'
+            run with sh when a prompt opens and closes, in the background,
+            with PIT_EVENT (open|close), PIT_TITLE, PIT_ORIGIN (the
+            command and pane that asked) and PIT_WHERE ("popup <client
+            tty>" or "inline <tty>"); never the passphrase. e.g.
+              set -g @pit-hook '[ "$PIT_EVENT" = open ] &&
+                notify-send "gpg wants a passphrase" "$PIT_ORIGIN"'
   - passphrase, repeat/confirm-new-passphrase, confirm and message dialogs
   - wrong-passphrase and mismatch errors shown inline
   - prompts that only give a fingerprint (ssh keys without a comment) get
