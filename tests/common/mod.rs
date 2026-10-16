@@ -358,13 +358,13 @@ impl Pty {
         self.wait(&format!("{needle:?} to go"), |s| !s.contents().contains(needle))
     }
 
-    /// The terminal modes that the pinentry must put back.
     fn termios(&self) -> libc::termios {
         let mut t: libc::termios = unsafe { std::mem::zeroed() };
         assert_eq!(unsafe { libc::tcgetattr(self.slave.as_raw_fd(), &mut t) }, 0);
         t
     }
 
+    /// The terminal modes that the pinentry must put back.
     pub fn modes(&self) -> [libc::tcflag_t; 4] {
         let t = self.termios();
         [t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag]
