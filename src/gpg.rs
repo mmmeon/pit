@@ -132,7 +132,9 @@ fn homedir() -> Option<String> {
 /// Runs gpg with `--with-colons` and `args`, within TIMEOUT.
 fn colons(args: &[&str]) -> Option<Vec<u8>> {
     let mut gpg = Command::new("gpg");
-    if let Some(dir) = homedir() {
+    // It finds GNUPGHOME and ~/.gnupg itself. Spelt out, ~/.gnupg can look
+    // like another home to it, with its own sockets and daemons.
+    if let Some(dir) = agent_homedir() {
         gpg.arg("--homedir").arg(dir);
     }
     let mut child = gpg
