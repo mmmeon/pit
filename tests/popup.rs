@@ -545,6 +545,17 @@ fn another_reader_in_the_job_gets_a_popup() {
 }
 
 #[test]
+fn another_reader_in_the_job_is_not_asked_when_the_popup_cant_show() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    s.tmux.run(&["detach-client", "-t", s.pty().path()]);
+    let pane = asked_from_window(&mut s, "cat | sleep 999", "sleep");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_NO_PIN_ENTRY));
+    assert!(!s.tmux.run(&["capture-pane", "-p", "-t", &pane]).contains("PIN:"));
+}
+
+#[test]
 fn reader_of_a_pipe_in_the_job_is_fine() {
     require_tmux!();
     let sb = Sandbox::new();

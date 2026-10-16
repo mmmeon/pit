@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::process;
 
 use crate::gpg;
@@ -145,8 +146,11 @@ impl State {
         // there, not in tmux, even if a tmux client is attached elsewhere.
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
         // Something else reading keys there would get some of them, and
-        // they're a passphrase: a full-screen program, say.
-        let free = |t: &File| sys::line_mode(t.as_raw_fd());
+        // they're a passphrase: a full-screen program, or another command.
+        let owner = self.owner;
+        let free = |t: &File| {
+            sys::line_mode(t.as_raw_fd()) && t.metadata().is_ok_and(|m| !origin::other_reader(m.rdev(), owner))
+        };
         let outside = self.ttyname.as_deref().filter(|t| !tmux::owns_tty(t));
         // Only if nothing else has it, though: then the popup is better, and
         // it falls back to here.

@@ -2,6 +2,7 @@
 //! pane it runs in. Read from /proc, so Linux only.
 
 use std::fs;
+use std::io;
 use std::os::unix::fs::MetadataExt;
 
 use crate::{sys, tmux, ui};
@@ -124,33 +125,45 @@ fn stat(pid: u32, n: usize) -> Option<i64> {
     rest.split_whitespace().nth(n)?.parse().ok()
 }
 
-/// Whether `pid` runs on the terminal `tty` and has it to itself: it's in
-/// the foreground, so the command typed there is still waiting on it, not
-/// the shell prompt or another job; and nothing else in its job reads the
-/// terminal, which could take some of the passphrase (`cat | gpg -d`).
+/// Whether `pid` runs on the terminal `tty` and is in its foreground: the
+/// command typed there is still waiting on it, not the shell prompt or
+/// another job.
 pub fn in_foreground(pid: u32, tty: &str) -> bool {
     let Ok(dev) = fs::metadata(tty).map(|m| m.rdev()) else { return false };
-    let Some(pgrp) = stat(pid, 2).filter(|&g| g > 0) else { return false };
     // tty_nr and st_rdev share the kernel's encoding of the device number.
     ours(pid)
         && stat(pid, 4).is_some_and(|t| t as u64 == dev)
-        && stat(pid, 5) == Some(pgrp)
-        && !other_reader(pid, pgrp, dev)
+        && stat(pid, 2).is_some_and(|g| g > 0 && Some(g) == stat(pid, 5))
 }
 
-/// Whether a process in job `pgrp` other than `pid` and what started it
-/// has the terminal `dev` as its input. Those above `pid` are waiting on
-/// it; anyone else may be reading. A program that opens /dev/tty itself
-/// isn't seen, but those (pagers, editors) put it in raw mode, which the
-/// caller checks.
-fn other_reader(pid: u32, pgrp: i64, dev: u64) -> bool {
-    let chain = ancestors(pid);
+/// Whether something other than the requester `owner` may be reading the
+/// terminal `dev`, and would take some of the passphrase (`cat | gpg -d`, or
+/// `cat` in the foreground with gpg elsewhere): a process in its foreground
+/// job with it as input. If `owner` is in that job, those above it are
+/// waiting on it. One we may not look at (sudo) could be reading. One that
+/// opens /dev/tty itself isn't seen, but those (pagers, editors) mostly put
+/// it in raw mode, which the caller checks. Without an owner, the requester
+/// can't be told apart from anyone else, so this can't tell.
+pub fn other_reader(dev: u64, owner: Option<u32>) -> bool {
+    let Some(owner) = owner else { return false };
     let Ok(procs) = fs::read_dir("/proc") else { return true };
+    let procs: Vec<u32> = procs.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
+    // Anything the terminal controls knows its foreground job.
+    let Some(fg) = procs
+        .iter()
+        .filter(|&&p| stat(p, 4).is_some_and(|t| t as u64 == dev))
+        .find_map(|&p| stat(p, 5).filter(|&g| g > 0))
+    else {
+        return false;
+    };
+    let waiting = if stat(owner, 2) == Some(fg) { ancestors(owner) } else { Vec::new() };
     procs
-        .flatten()
-        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|p| !chain.contains(p) && stat(*p, 2) == Some(pgrp))
-        .any(|p| fs::metadata(format!("/proc/{p}/fd/0")).is_ok_and(|m| m.rdev() == dev))
+        .into_iter()
+        .filter(|p| !waiting.contains(p) && stat(*p, 2) == Some(fg))
+        .any(|p| match fs::metadata(format!("/proc/{p}/fd/0")) {
+            Ok(m) => m.rdev() == dev,
+            Err(e) => e.kind() == io::ErrorKind::PermissionDenied,
+        })
 }
 
 fn comm(pid: u32) -> Option<String> {

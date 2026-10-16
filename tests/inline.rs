@@ -261,3 +261,18 @@ fn terminal_in_raw_mode_is_not_asked() {
     assert_eq!(err_code(&p.finish()), Some(ERR_NO_PIN_ENTRY));
     assert!(!pty.text().contains("PIN:"));
 }
+
+#[test]
+fn another_reader_in_the_foreground_is_not_asked() {
+    // gpg asked from elsewhere, and cat has the terminal: it would take
+    // some of the keys.
+    let (_sb, pty, mut p) = setup();
+    let mut cat = pty.command("cat").spawn().unwrap();
+    let uid = unsafe { libc::getuid() };
+    p.setup(&[&format!("OPTION owner={}/{uid}", std::process::id())]);
+    p.start("GETPIN");
+    assert_eq!(err_code(&p.finish()), Some(ERR_NO_PIN_ENTRY));
+    assert!(!pty.text().contains("PIN:"));
+    let _ = cat.kill();
+    let _ = cat.wait();
+}
