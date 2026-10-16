@@ -531,3 +531,28 @@ fn slow_hook_does_not_hold_up_the_prompt() {
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
     assert!(start.elapsed() < Duration::from_secs(10));
 }
+
+#[test]
+fn another_reader_in_the_job_gets_a_popup() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    // cat reads the pane: it could take some of the keys.
+    asked_from_window(&mut s, "cat | sleep 999", "sleep");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
+fn reader_of_a_pipe_in_the_job_is_fine() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    // Like `gpg ... | tee out`: cat reads the pipe, not the pane.
+    let pane = asked_from_window(&mut s, "sleep 999 | cat", "sleep");
+    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", &pane]);
+    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
+    s.tmux.run(&["send-keys", "-t", &pane, "x", "Enter"]);
+    assert_eq!(s.p.finish(), ["D x", "OK"]);
+}

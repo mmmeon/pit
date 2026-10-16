@@ -124,15 +124,33 @@ fn stat(pid: u32, n: usize) -> Option<i64> {
     rest.split_whitespace().nth(n)?.parse().ok()
 }
 
-/// Whether `pid` runs on the terminal `tty` and is in its foreground: the
-/// command typed there is still waiting on it, not the shell prompt or
-/// another job.
+/// Whether `pid` runs on the terminal `tty` and has it to itself: it's in
+/// the foreground, so the command typed there is still waiting on it, not
+/// the shell prompt or another job; and nothing else in its job reads the
+/// terminal, which could take some of the passphrase (`cat | gpg -d`).
 pub fn in_foreground(pid: u32, tty: &str) -> bool {
     let Ok(dev) = fs::metadata(tty).map(|m| m.rdev()) else { return false };
+    let Some(pgrp) = stat(pid, 2).filter(|&g| g > 0) else { return false };
     // tty_nr and st_rdev share the kernel's encoding of the device number.
     ours(pid)
         && stat(pid, 4).is_some_and(|t| t as u64 == dev)
-        && stat(pid, 2).is_some_and(|g| g > 0 && Some(g) == stat(pid, 5))
+        && stat(pid, 5) == Some(pgrp)
+        && !other_reader(pid, pgrp, dev)
+}
+
+/// Whether a process in job `pgrp` other than `pid` and what started it
+/// has the terminal `dev` as its input. Those above `pid` are waiting on
+/// it; anyone else may be reading. A program that opens /dev/tty itself
+/// isn't seen, but those (pagers, editors) put it in raw mode, which the
+/// caller checks.
+fn other_reader(pid: u32, pgrp: i64, dev: u64) -> bool {
+    let chain = ancestors(pid);
+    let Ok(procs) = fs::read_dir("/proc") else { return true };
+    procs
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|p| !chain.contains(p) && stat(*p, 2) == Some(pgrp))
+        .any(|p| fs::metadata(format!("/proc/{p}/fd/0")).is_ok_and(|m| m.rdev() == dev))
 }
 
 fn comm(pid: u32) -> Option<String> {

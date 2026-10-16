@@ -18,9 +18,9 @@ tmux
             A terminal in raw mode (a full-screen program reading keys) is
             never asked: it could take some of the passphrase. Outside
             tmux that means the popup, or no prompt if no client is attached.
-            Not caught: another program in the same foreground job waiting
-            on a line from the terminal (e.g. `cat | gpg ...` typed at it).
-            It can read some of the passphrase keys; use the popup there.
+            Nor is a pane where another program in the same job reads the
+            terminal (e.g. `cat | gpg -d`): it gets the popup. Not caught:
+            one that opens /dev/tty itself without raw mode, which is rare.
   - hook:   set -g @pit-hook '<command>'
             run with sh when a prompt opens and closes, in the background,
             with PIT_EVENT (open|close), PIT_TITLE, PIT_ORIGIN (the
