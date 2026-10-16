@@ -1,6 +1,6 @@
 //! The pinentry side of the Assuan protocol that gpg-agent speaks.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
 use std::process;
@@ -144,11 +144,13 @@ impl State {
         // UPDATESTARTUPTTY. If that's an ordinary terminal, the user is
         // there, not in tmux, even if a tmux client is attached elsewhere.
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
-        let free = |t: &str| open(t).ok().filter(|t| sys::line_mode(t.as_raw_fd()));
+        // Something else reading keys there would get some of them, and
+        // they're a passphrase: a full-screen program, say.
+        let free = |t: &File| sys::line_mode(t.as_raw_fd());
         let outside = self.ttyname.as_deref().filter(|t| !tmux::owns_tty(t));
-        // Only if nothing else has it, though: with a full-screen program
-        // up there, the popup is better, and it falls back to here.
-        let mut tty = outside.and_then(free);
+        // Only if nothing else has it, though: then the popup is better, and
+        // it falls back to here.
+        let mut tty = outside.and_then(|t| open(t).ok()).filter(free);
         // In a pane, the command that asked may still have it to itself:
         // nothing else in the foreground, nothing on the screen. Then ask in
         // place, right under it, as on an ordinary terminal.
@@ -158,7 +160,7 @@ impl State {
             && origin::in_foreground(pid, t)
             && tmux::pane_idle(t)
         {
-            tty = free(t);
+            tty = open(t).ok().filter(free);
         }
 
         if tty.is_none()
@@ -177,17 +179,19 @@ impl State {
         }
 
         // Outside tmux, no tmux client, or the popup failed: ask on the
-        // terminal itself, if we know it.
-        if tty.is_none() {
-            let Some(ttyname) = &self.ttyname else { return Ok(None) };
-            tty = Some(open(ttyname)?);
-        }
-        // Something else is reading keys there: it would get some of them,
-        // and they're a passphrase. Better to not ask at all.
-        if !tty.as_ref().is_some_and(|t| sys::line_mode(t.as_raw_fd())) {
-            return Ok(None);
-        }
-        let tty = tty.unwrap();
+        // terminal itself, if we know it and nothing else has it. Better to
+        // not ask at all than to give away some of the passphrase.
+        let tty = match tty {
+            Some(tty) => tty,
+            None => {
+                let Some(ttyname) = &self.ttyname else { return Ok(None) };
+                let tty = open(ttyname)?;
+                if !free(&tty) {
+                    return Ok(None);
+                }
+                tty
+            }
+        };
         req.style = Style::Bar;
         req.width = sys::winsize(tty.as_raw_fd()).map_or(78, |(cols, _)| cols).saturating_sub(2);
         let place = format!("inline {}", self.ttyname.as_deref().unwrap_or_default());
