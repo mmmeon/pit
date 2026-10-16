@@ -7,6 +7,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::ui::Secret;
@@ -111,7 +112,8 @@ fn card_number(desc: &str) -> Option<String> {
 /// The `--homedir` gpg-agent, our parent, was started with. It needn't be in
 /// the environment it gave us, and without it gpg would look in ~/.gnupg.
 fn agent_homedir() -> Option<String> {
-    homedir_arg(&origin::args(std::os::unix::process::parent_id()))
+    static DIR: OnceLock<Option<String>> = OnceLock::new();
+    DIR.get_or_init(|| homedir_arg(&origin::args(std::os::unix::process::parent_id()))).clone()
 }
 
 fn homedir_arg(args: &[String]) -> Option<String> {
