@@ -27,6 +27,11 @@ fn tmux(args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// A line in `format` for each pane of every session.
+fn panes(format: &str) -> Option<String> {
+    tmux(&["list-panes", "-a", "-F", format])
+}
+
 pub struct Client {
     pub tty: String,
     pub width: usize,
@@ -35,7 +40,7 @@ pub struct Client {
 /// Whether `tty` belongs to tmux: one of its panes, or a terminal a client
 /// is attached from.
 pub fn owns_tty(tty: &str) -> bool {
-    let panes = tmux(&["list-panes", "-a", "-F", "#{pane_tty}"]);
+    let panes = panes("#{pane_tty}");
     let clients = tmux(&["list-clients", "-F", "#{client_tty}"]);
     [panes, clients].into_iter().flatten().any(|out| out.lines().any(|l| l == tty))
 }
@@ -67,8 +72,7 @@ fn clients() -> Vec<(u64, Client)> {
 
 /// Each pane's process, with the pane as `session:window.pane`.
 pub fn pane_pids() -> Vec<(u32, String)> {
-    let Some(out) = tmux(&["list-panes", "-a", "-F", "#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}"])
-    else {
+    let Some(out) = panes("#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}") else {
         return Vec::new();
     };
     out.lines()
@@ -82,7 +86,7 @@ pub fn pane_pids() -> Vec<(u32, String)> {
 /// Whether the pane on `tty` shows its terminal as is: no full-screen
 /// program on the alternate screen, and not in copy mode.
 pub fn pane_idle(tty: &str) -> bool {
-    let Some(out) = tmux(&["list-panes", "-a", "-F", "#{pane_tty}\t#{alternate_on}\t#{pane_in_mode}"]) else {
+    let Some(out) = panes("#{pane_tty}\t#{alternate_on}\t#{pane_in_mode}") else {
         return false;
     };
     out.lines().any(|l| l.split_once('\t').is_some_and(|(t, modes)| t == tty && modes == "0\t0"))
@@ -172,7 +176,14 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
     let mut ready = false;
     let outcome = loop {
         let exited = !matches!(popup.try_wait(), Ok(None));
-        if exited || sys::poll(&[resp.as_raw_fd()], Some(Duration::from_millis(100)))?[0] != 0 {
+        let readable = match sys::poll(&[resp.as_raw_fd()], Some(Duration::from_millis(100))) {
+            Ok(r) => r[0] != 0,
+            Err(e) => {
+                let _ = popup.kill();
+                break Err(e);
+            }
+        };
+        if exited || readable {
             let mut chunk = [0; 256];
             while let Ok(n @ 1..) = resp.read(&mut chunk) {
                 buf.0.extend_from_slice(&chunk[..n]);
@@ -182,7 +193,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
         if let Some(i) = buf.0.iter().position(|&b| b == b'\n') {
             let line = Secret(buf.0.drain(..=i).collect());
             if line.0 != b"READY\n" {
-                break Some(Outcome::decode(&line.0));
+                break Ok(Some(Outcome::decode(&line.0)));
             }
             if !ready {
                 // Only once it's really up, and without the origin: other
@@ -197,11 +208,11 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
         if exited {
             // Closed from tmux before answering: treat it as cancel. Never
             // came up at all (e.g. the client already has a popup): fall back.
-            break ready.then_some(Outcome::Cancel);
+            break Ok(ready.then_some(Outcome::Cancel));
         }
         if !ready && start.elapsed() > POPUP_TIMEOUT {
             let _ = popup.kill();
-            break None;
+            break Ok(None);
         }
     };
     drop(ctl);
@@ -209,7 +220,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, dir: &Path) -> io::Result
     if ready {
         hook("close", req, &format!("popup {}", client.tty));
     }
-    Ok(outcome)
+    outcome
 }
 
 /// Runs inside the popup: show the prompt and send back the answer.

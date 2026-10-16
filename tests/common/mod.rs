@@ -359,19 +359,22 @@ impl Pty {
     }
 
     /// The terminal modes that the pinentry must put back.
-    pub fn modes(&self) -> [libc::tcflag_t; 4] {
+    fn termios(&self) -> libc::termios {
         let mut t: libc::termios = unsafe { std::mem::zeroed() };
         assert_eq!(unsafe { libc::tcgetattr(self.slave.as_raw_fd(), &mut t) }, 0);
+        t
+    }
+
+    pub fn modes(&self) -> [libc::tcflag_t; 4] {
+        let t = self.termios();
         [t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag]
     }
 
     /// Turns off line mode, as a full-screen program does.
     pub fn raw(&self) {
-        let fd = self.slave.as_raw_fd();
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(unsafe { libc::tcgetattr(fd, &mut t) }, 0);
+        let mut t = self.termios();
         t.c_lflag &= !(libc::ICANON | libc::ECHO);
-        assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) }, 0);
+        assert_eq!(unsafe { libc::tcsetattr(self.slave.as_raw_fd(), libc::TCSANOW, &t) }, 0);
     }
 
     /// A Command that runs on this pty as its controlling terminal.

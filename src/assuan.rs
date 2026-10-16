@@ -127,8 +127,12 @@ impl State {
         let mut req = self.request(kind);
         // gpg's own descriptions quote the user ID; ssh's may only give the
         // fingerprint.
+        // Card PIN prompts give neither, only the card's number.
         if !req.desc.contains('"')
-            && let Some(name) = self.keyinfo.as_deref().and_then(gpg::key_name).or_else(|| gpg::card_name(&req.desc))
+            && let Some(name) = match self.keyinfo.as_deref() {
+                Some(k) => gpg::key_name(k),
+                None => gpg::card_name(&req.desc),
+            }
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }
@@ -140,10 +144,11 @@ impl State {
         // UPDATESTARTUPTTY. If that's an ordinary terminal, the user is
         // there, not in tmux, even if a tmux client is attached elsewhere.
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
+        let free = |t: &str| open(t).ok().filter(|t| sys::line_mode(t.as_raw_fd()));
         let outside = self.ttyname.as_deref().filter(|t| !tmux::owns_tty(t));
         // Only if nothing else has it, though: with a full-screen program
         // up there, the popup is better, and it falls back to here.
-        let mut tty = outside.and_then(|t| open(t).ok()).filter(|t| sys::line_mode(t.as_raw_fd()));
+        let mut tty = outside.and_then(free);
         // In a pane, the command that asked may still have it to itself:
         // nothing else in the foreground, nothing on the screen. Then ask in
         // place, right under it, as on an ordinary terminal.
@@ -153,7 +158,7 @@ impl State {
             && origin::in_foreground(pid, t)
             && tmux::pane_idle(t)
         {
-            tty = open(t).ok().filter(|t| sys::line_mode(t.as_raw_fd()));
+            tty = free(t);
         }
 
         if tty.is_none()
