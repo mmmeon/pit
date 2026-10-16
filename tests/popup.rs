@@ -472,7 +472,7 @@ fn terminal_in_raw_mode_outside_tmux_gets_a_popup() {
 /// Points `@pit-hook` at a log of its events. Returns the log's path.
 fn log_hook(sb: &Sandbox, tmux: &Tmux) -> std::path::PathBuf {
     let log = sb.tmp().join("hook.log");
-    tmux.set("@pit-hook", &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE\" >> {}", log.display()));
+    tmux.set("@pit-hook", &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE|$PIT_ORIGIN\" >> {}", log.display()));
     log
 }
 
@@ -499,7 +499,7 @@ fn hook_runs_on_popup_open_and_close() {
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
     let tty = s.pty().path();
-    assert_eq!(hook_lines(&log, 2), [format!("open popup {tty} Unlock"), format!("close popup {tty} Unlock")]);
+    assert_eq!(hook_lines(&log, 2), [format!("open popup {tty} Unlock|"), format!("close popup {tty} Unlock|")]);
 }
 
 #[test]
@@ -515,7 +515,7 @@ fn hook_runs_on_inline_open_and_close() {
     s.tmux.run(&["send-keys", "-t", &pane, "x", "Enter"]);
     assert_eq!(s.p.finish(), ["D x", "OK"]);
     let tty = tty.trim();
-    assert_eq!(hook_lines(&log, 2), [format!("open inline {tty} gpg"), format!("close inline {tty} gpg")]);
+    assert_eq!(hook_lines(&log, 2), [format!("open inline {tty} gpg|sleep 999 @ {pane}"), format!("close inline {tty} gpg|sleep 999 @ {pane}")]);
 }
 
 #[test]

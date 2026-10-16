@@ -137,6 +137,9 @@ impl State {
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }
+        // The popup can land far from the command that asked; say which.
+        // The hook is told too, wherever it's asked.
+        req.origin = self.owner.map(origin::find).and_then(|o| o.label()).unwrap_or_default();
         // Like pinentry: the error and repeat prompt apply to one dialog only.
         self.error = None;
         self.repeat = None;
@@ -173,8 +176,6 @@ impl State {
             let opt = |name| tmux::option(name);
             req.style = opt("@pinentry-style").and_then(|s| Style::parse(&s)).unwrap_or_default();
             req.echo = opt("@pit-echo").and_then(|s| Echo::parse(&s)).unwrap_or_default();
-            // The popup can land far from the command that asked; say which.
-            req.origin = self.owner.map(origin::find).and_then(|o| o.label()).unwrap_or_default();
             let lay = ui::layout(&req, client.width.saturating_sub(4));
             req.width = lay.width;
             if let Some(outcome) = tmux::prompt(&client, &req, &lay)? {
