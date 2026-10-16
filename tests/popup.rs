@@ -538,13 +538,20 @@ fn slow_hook_does_not_hold_up_the_prompt() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    s.tmux.set("@pit-hook", "sleep 100");
+    let pid = sb.tmp().join("hook.pid");
+    let cmd = format!("[ \"$PIT_EVENT\" = open ] || exit 0; echo $$ > {}; exec sleep 100", pid.display());
+    s.tmux.set("@pit-hook", &cmd);
     let start = Instant::now();
     s.p.start("GETPIN");
     s.pty().wait_text("PIN:");
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
     assert!(start.elapsed() < Duration::from_secs(10));
+    // Not left sleeping after the test.
+    let read = || std::fs::read_to_string(&pid).unwrap_or_default();
+    let sleeper: i32 = wait_until("hook to start", || read().trim().parse().ok(), read);
+    assert_eq!(unsafe { libc::kill(sleeper, libc::SIGTERM) }, 0);
+    std::fs::remove_file(&pid).unwrap();
 }
 
 #[test]
