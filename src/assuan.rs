@@ -142,6 +142,17 @@ impl State {
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
         let outside = self.ttyname.as_deref().filter(|t| !tmux::owns_tty(t));
         let mut tty = outside.and_then(|t| open(t).ok());
+        // In a pane, the command that asked may still have it to itself:
+        // nothing else in the foreground, nothing on the screen. Then ask in
+        // place, right under it, as on an ordinary terminal.
+        if tty.is_none()
+            && let (Some(t), Some(pid)) = (self.ttyname.as_deref(), self.owner)
+            && tmux::option("@pit-inline").as_deref() != Some("never")
+            && origin::in_foreground(pid, t)
+            && tmux::pane_idle(t)
+        {
+            tty = open(t).ok();
+        }
 
         if tty.is_none()
             && let Some(client) = tmux::find_client()

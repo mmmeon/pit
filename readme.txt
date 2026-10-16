@@ -9,6 +9,12 @@ tmux
   - styles: set -g @pinentry-style bar|box|line   (default bar)
   - echo:   set -g @pit-echo marker|dots|none (default marker;
             marker changes per key without revealing length)
+  - inline: set -g @pit-inline auto|never     (default auto)
+            auto draws the prompt in place under the command that asked,
+            instead of in a popup, when that command is in the foreground
+            of its own pane and nothing full-screen is showing there.
+            never always uses the popup in panes. Either way, a terminal
+            outside tmux is always asked inline, even with tmux running.
   - passphrase, repeat/confirm-new-passphrase, confirm and message dialogs
   - wrong-passphrase and mismatch errors shown inline
   - prompts that only give a fingerprint (ssh keys without a comment) get

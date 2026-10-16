@@ -395,3 +395,60 @@ fn hash_in_title_is_not_a_tmux_format() {
     b.pty.send("\x1b");
     assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
 }
+
+/// A pinentry asked by the process `name` run by `cmd` in a new window,
+/// with GPG_TTY set to that window's pane.
+fn asked_from_window(s: &mut Setup, cmd: &str, name: &str) -> String {
+    let (pane, pid) = in_window(&s.tmux, cmd, name);
+    let tty = s.tmux.run(&["display", "-p", "-t", &pane, "#{pane_tty}"]);
+    s.p.setup(&[&format!("OPTION ttyname={}", tty.trim()), &format!("OPTION owner={pid}/{} {}", uid(), hostname())]);
+    s.p.start("GETPIN");
+    pane
+}
+
+#[test]
+fn foreground_command_in_a_pane_is_asked_in_place() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let pane = asked_from_window(&mut s, "sleep 999", "sleep");
+    let capture = || s.tmux.run(&["capture-pane", "-p", "-t", &pane]);
+    wait_until("inline prompt", || capture().contains("PIN:").then_some(()), capture);
+    s.tmux.run(&["send-keys", "-t", &pane, "hunter2", "Enter"]);
+    assert_eq!(s.p.finish(), ["D hunter2", "OK"]);
+}
+
+#[test]
+fn inline_can_be_turned_off() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    s.tmux.set("@pit-inline", "never");
+    asked_from_window(&mut s, "sleep 999", "sleep");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
+fn full_screen_program_gets_a_popup() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    asked_from_window(&mut s, "printf '\\033[?1049h'; sleep 999", "sleep");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
+fn background_job_gets_a_popup() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    // With job control the shell keeps the foreground, as at a prompt.
+    asked_from_window(&mut s, "set -m; sleep 999 & wait", "sleep");
+    s.pty().wait_text("PIN:");
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}

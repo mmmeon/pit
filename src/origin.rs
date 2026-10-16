@@ -112,10 +112,27 @@ fn ancestors(pid: u32) -> Vec<u32> {
 }
 
 fn ppid(pid: u32) -> Option<u32> {
+    stat(pid, 1)?.try_into().ok()
+}
+
+/// Field `n` of /proc/<pid>/stat, counting from the one after comm: 0 is
+/// state, 1 ppid, 2 pgrp, 4 tty_nr, 5 tpgid.
+fn stat(pid: u32, n: usize) -> Option<i64> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // comm is in parens and may hold spaces; the fields after it don't.
     let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(1)?.parse().ok()
+    rest.split_whitespace().nth(n)?.parse().ok()
+}
+
+/// Whether `pid` runs on the terminal `tty` and is in its foreground: the
+/// command typed there is still waiting on it, not the shell prompt or
+/// another job.
+pub fn in_foreground(pid: u32, tty: &str) -> bool {
+    let Ok(dev) = fs::metadata(tty).map(|m| m.rdev()) else { return false };
+    // tty_nr and st_rdev share the kernel's encoding of the device number.
+    ours(pid)
+        && stat(pid, 4).is_some_and(|t| t as u64 == dev)
+        && stat(pid, 2).is_some_and(|g| g > 0 && Some(g) == stat(pid, 5))
 }
 
 fn comm(pid: u32) -> Option<String> {
@@ -174,6 +191,13 @@ mod tests {
         if sys::uid() != 0 {
             assert!(find(1).label().is_none());
         }
+    }
+
+    #[test]
+    fn foreground_needs_the_same_terminal() {
+        let me = std::process::id();
+        assert!(!in_foreground(me, "/dev/null"));
+        assert!(!in_foreground(me, "/nonexistent"));
     }
 
     #[test]

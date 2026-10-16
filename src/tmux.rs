@@ -79,6 +79,15 @@ pub fn pane_pids() -> Vec<(u32, String)> {
         .collect()
 }
 
+/// Whether the pane on `tty` shows its terminal as is: no full-screen
+/// program on the alternate screen, and not in copy mode.
+pub fn pane_idle(tty: &str) -> bool {
+    let Some(out) = tmux(&["list-panes", "-a", "-F", "#{pane_tty}\t#{alternate_on}\t#{pane_in_mode}"]) else {
+        return false;
+    };
+    out.lines().any(|l| l.split_once('\t').is_some_and(|(t, modes)| t == tty && modes == "0\t0"))
+}
+
 /// Keeps tmux from expanding `#` in text we pass as a format.
 fn literal(s: &str) -> String {
     s.replace('#', "##")
