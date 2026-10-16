@@ -83,14 +83,15 @@ fn token(key: &[u8]) -> Option<String> {
 
 /// Whether the OpenPGP card with application ID `serial` (D27600012401,
 /// version, 4 digits of maker, 8 of serial, 0000) is the one a prompt
-/// numbers: by its serial alone, or with the maker in front.
+/// numbers: by its serial alone, or with the maker in front. A YubiKey's
+/// is shown as a decimal number, which may be only 7 digits long.
 fn on_card(serial: &str, number: &str) -> bool {
     let serial = serial.to_ascii_uppercase();
     let number = number.to_ascii_uppercase();
     serial.len() == 32
         && serial.starts_with("D27600012401")
         && match number.len() {
-            8 => serial[20..28] == number,
+            7 | 8 => serial[20..28] == format!("{number:0>8}"),
             12 => serial[16..28] == number,
             _ => false,
         }
@@ -256,10 +257,12 @@ mod tests {
         assert!(on_card(sn, "30774964"));
         assert!(on_card(sn, "000630774964"));
         assert!(on_card(&sn.to_lowercase(), "30774964"));
+        assert!(on_card("D2760001240103040006041234560000", "4123456"));
         // Across maker and serial, or the wrong card.
         assert!(!on_card(sn, "06307749"));
         assert!(!on_card(sn, "27425671"));
         assert!(!on_card(sn, "3077496"));
+        assert!(!on_card(sn, "077496"));
         assert!(!on_card("D2760001240100000006307749", "30774964"));
     }
 
@@ -278,6 +281,7 @@ mod tests {
         assert_eq!(card_number(desc).as_deref(), Some("000630774964"));
         // As gpg-agent passes on a YubiKey's: its serial in decimal.
         assert_eq!(card_number("Please unlock the card\n\nNumber: 30 774 964\nHolder: \nCounter: 3").as_deref(), Some("30774964"));
+        assert_eq!(card_number("Please unlock the card\n\nNumber: 4 123 456\nHolder: ").as_deref(), Some("4123456"));
         assert_eq!(card_number("Please unlock the card\n\nHolder: x"), None);
         assert_eq!(card_number("Please unlock the card\n\nNumber: 0006 zz"), None);
     }
