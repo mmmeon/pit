@@ -79,6 +79,8 @@ struct State {
     ttyname: Option<String>,
     /// The requesting process, from `owner`, when it's on this host.
     owner: Option<u32>,
+    /// `owner` was a proxy in front of the agent, not who asked.
+    proxied: bool,
     ttytype: Option<String>,
     default_ok: Option<String>,
     default_cancel: Option<String>,
@@ -92,7 +94,11 @@ impl State {
         let value = Some(text(value.trim_start_matches([' ', '='])));
         match name.to_ascii_lowercase().as_str() {
             "ttyname" => self.ttyname = value,
-            "owner" => self.owner = value.as_deref().and_then(origin::owner_pid),
+            "owner" => {
+                let pid = value.as_deref().and_then(origin::owner_pid);
+                self.proxied = pid.is_some_and(origin::is_agent_proxy);
+                self.owner = pid.filter(|_| !self.proxied);
+            }
             "ttytype" => self.ttytype = value,
             "default-ok" => self.default_ok = value,
             "default-cancel" => self.default_cancel = value,
@@ -140,9 +146,26 @@ impl State {
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }
+        // What asks on a terminal runs on it, or under something that does: if
+        // the owner doesn't, it's a stand-in (a proxy, a daemon), not who asked.
+        let owner = self.owner.filter(|&p| self.ttyname.as_deref().is_none_or(|t| origin::under_tty(p, t)));
         // The popup can land far from the command that asked; say which.
-        // The hook is told too, wherever it's asked.
-        req.origin = self.owner.map(origin::find).and_then(|o| o.label()).unwrap_or_default();
+        // The hook is told too, wherever it's asked. Without an owner, the
+        // terminal still says where.
+        let standin = self.proxied || self.owner.is_some() && owner.is_none();
+        req.origin = match (owner, self.ttyname.as_deref()) {
+            (Some(pid), _) => origin::find(pid).label(),
+            // Behind a proxy, the terminal says who, if there is one.
+            (None, Some(t)) if standin && origin::is_tty(t) => origin::find_tty(t).label(),
+            // Otherwise whoever's looking at the client the popup goes to is
+            // likely who asked, but it's a guess.
+            (None, _) if standin => tmux::find_client()
+                .and_then(|c| tmux::active_pane_tty(&c))
+                .and_then(|t| origin::find_tty(&t).label())
+                .map(|l| format!("{l} ?")),
+            (None, _) => None,
+        }
+        .unwrap_or_default();
         // Like pinentry: the error and repeat prompt apply to one dialog only.
         self.error = None;
         self.repeat = None;
@@ -153,9 +176,11 @@ impl State {
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
         // Something else reading keys there would get some of them, and
         // they're a passphrase: a full-screen program, or another command.
-        let owner = self.owner;
+        // An owner off this terminal still counts here: it can't be told apart
+        // from a reader, and giving away keys is the worse mistake.
+        let asker = self.owner;
         let free = |t: &File| {
-            sys::line_mode(t.as_raw_fd()) && t.metadata().is_ok_and(|m| !origin::other_reader(m.rdev(), owner))
+            sys::line_mode(t.as_raw_fd()) && t.metadata().is_ok_and(|m| !origin::other_reader(m.rdev(), asker))
         };
         let outside = self.ttyname.as_deref().filter(|t| !tmux::owns_tty(t));
         // Only if nothing else has it, though: then the popup is better, and
@@ -165,7 +190,7 @@ impl State {
         // nothing else in the foreground, nothing on the screen. Then ask in
         // place, right under it, as on an ordinary terminal.
         if tty.is_none()
-            && let (Some(t), Some(pid)) = (self.ttyname.as_deref(), self.owner)
+            && let (Some(t), Some(pid)) = (self.ttyname.as_deref(), owner)
             && cfg.inline
             && origin::in_foreground(pid, t)
             && tmux::pane_idle(t)

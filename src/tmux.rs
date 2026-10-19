@@ -84,6 +84,18 @@ pub fn pane_pids() -> Vec<(u32, String)> {
         .collect()
 }
 
+/// The tty of the pane `client` is showing.
+pub fn active_pane_tty(client: &Client) -> Option<String> {
+    let out = tmux(&["list-clients", "-F", "#{client_tty}\t#{pane_tty}"])?;
+    out.lines().find_map(|l| l.split_once('\t').filter(|(c, _)| *c == client.tty).map(|(_, p)| p.to_string()))
+}
+
+/// The pane on `tty`, as `session:window.pane`.
+pub fn pane_on(tty: &str) -> Option<String> {
+    let out = panes("#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}")?;
+    out.lines().find_map(|l| l.split_once('\t').filter(|(t, _)| *t == tty).map(|(_, p)| origin::clean(p)))
+}
+
 /// Whether the pane on `tty` shows its terminal as is: no full-screen
 /// program on the alternate screen, and not in copy mode.
 pub fn pane_idle(tty: &str) -> bool {

@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use crate::{sys, tmux, ui};
 
@@ -49,6 +49,26 @@ pub fn owner_pid(value: &str) -> Option<u32> {
     pid.parse().ok().filter(|&p| p > 1)
 }
 
+/// Whether `pid` listens on a gpg-agent socket itself: a proxy in front of
+/// the agent (yubikey-touch-detector), which the agent then sees as the
+/// requester of everything that passes through it, not whoever really asked.
+pub fn is_agent_proxy(pid: u32) -> bool {
+    let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) else { return false };
+    let inodes: Vec<String> = fds
+        .flatten()
+        .filter_map(|e| fs::read_link(e.path()).ok()?.to_str()?.strip_prefix("socket:[")?.strip_suffix(']').map(String::from))
+        .collect();
+    let Ok(table) = fs::read_to_string("/proc/net/unix") else { return false };
+    // Num RefCount Protocol Flags Type St Inode Path; 0x10000 is listening.
+    table.lines().skip(1).any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 8
+            && u32::from_str_radix(f[3].trim_start_matches("0x"), 16).is_ok_and(|fl| fl & 0x10000 != 0)
+            && inodes.iter().any(|i| i == f[6])
+            && f[7].rsplit('/').next().is_some_and(|n| n.starts_with("S.gpg-agent"))
+    })
+}
+
 pub fn find(pid: u32) -> Origin {
     // The kernel gives the agent the requester's pid as seen from its own pid
     // namespace, which is ours too, so it's the right process unless it has
@@ -73,6 +93,38 @@ pub fn find(pid: u32) -> Origin {
         cmd: top.and_then(|&p| cmdline(p)),
         pane: pane.map(|p| cut(&p, MAX_PANE)),
     }
+}
+
+/// Whether `path` is a terminal device: gpg says "not a tty" when it has none.
+pub fn is_tty(path: &str) -> bool {
+    use std::os::fd::AsRawFd;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
+        .open(path)
+        .is_ok_and(|f| unsafe { libc::isatty(f.as_raw_fd()) == 1 })
+}
+
+/// Who has the terminal `tty` when the requester isn't known (it asked through
+/// a proxy): the leader of its foreground job, and the pane it's in. A shell
+/// there is only the prompt, not who asked.
+pub fn find_tty(tty: &str) -> Origin {
+    let pane = tmux::pane_on(tty).map(|p| cut(&p, MAX_PANE));
+    let cmd = fs::metadata(tty)
+        .ok()
+        .map(|m| m.rdev())
+        .and_then(|dev| {
+            let procs = fs::read_dir("/proc").ok()?;
+            procs
+                .flatten()
+                .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+                .filter(|&p| stat(p, 4).is_some_and(|t| t as u64 == dev))
+                .find_map(|p| stat(p, 5).filter(|&g| g > 1))
+        })
+        .map(|g| g as u32)
+        .filter(|&p| ours(p) && comm(p).is_some_and(|c| !stops(&c) || wrapper(p)))
+        .and_then(cmdline);
+    Origin { cmd, pane }
 }
 
 fn stops(comm: &str) -> bool {
@@ -123,6 +175,14 @@ fn stat(pid: u32, n: usize) -> Option<i64> {
     // comm is in parens and may hold spaces; the fields after it don't.
     let rest = &stat[stat.rfind(')')? + 1..];
     rest.split_whitespace().nth(n)?.parse().ok()
+}
+
+/// Whether `pid` or one of its parents has the terminal `tty` as its own: the
+/// command typed there is, or waits on, a process like that. One that doesn't
+/// (a daemon, a proxy in front of the agent) isn't who asked on `tty`.
+pub fn under_tty(pid: u32, tty: &str) -> bool {
+    let Ok(dev) = fs::metadata(tty).map(|m| m.rdev()) else { return false };
+    ancestors(pid).into_iter().any(|p| stat(p, 4).is_some_and(|t| t as u64 == dev))
 }
 
 /// Whether `pid` runs on the terminal `tty` and is in its foreground: the
@@ -222,6 +282,27 @@ mod tests {
         if sys::uid() != 0 {
             assert!(find(1).label().is_none());
         }
+    }
+
+    #[test]
+    fn ordinary_processes_are_not_agent_proxies() {
+        assert!(!is_agent_proxy(std::process::id()));
+        assert!(!is_agent_proxy(u32::MAX));
+    }
+
+    #[test]
+    fn under_tty_needs_a_terminal() {
+        let me = std::process::id();
+        assert!(!under_tty(me, "/dev/null"));
+        assert!(!under_tty(me, "/nonexistent"));
+        assert!(!under_tty(u32::MAX, "/dev/tty"));
+    }
+
+    #[test]
+    fn only_terminals_are_ttys() {
+        assert!(!is_tty("not a tty"));
+        assert!(!is_tty("/nonexistent"));
+        assert!(!is_tty("/dev/null"));
     }
 
     #[test]
