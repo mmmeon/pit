@@ -1,9 +1,10 @@
 //! Test harness: ptys read through a vt100 parser, the pinentry binary spoken
 //! to over Assuan, and an isolated tmux server.
 //!
-//! To watch the tests:
-//!   PIT_TEST_SHOW=1 cargo test -- --nocapture
-//!     prints a snapshot of the screen each time a test waits on it
+//! Each time a test waits on a screen it prints a snapshot of it, which
+//! cargo shows for failed tests. To watch the tests:
+//!   cargo test -- --nocapture
+//!     prints the snapshots of passing tests too
 //!   PIT_TEST_LIVE=1 cargo test
 //!     replays every pty on this terminal as it's drawn, one test at a time,
 //!     typing slowly (PIT_TEST_SLOW=ms per key, default 120). Ptys take this
@@ -46,11 +47,6 @@ macro_rules! require_tmux {
 
 fn flag(name: &str) -> bool {
     env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
-}
-
-/// Whether to print screen snapshots (PIT_TEST_SHOW).
-pub fn show() -> bool {
-    flag("PIT_TEST_SHOW")
 }
 
 /// This terminal's modes before live replay turned echo off.
@@ -145,9 +141,9 @@ pub fn have(cmd: &str) -> bool {
 }
 
 /// Polls `f` until it returns Some, or panics with `what` and `dump()`.
-/// With PIT_TEST_SHOW, prints `dump()` once it's satisfied.
+/// Prints `dump()` once it's satisfied.
 pub fn wait_until<T>(what: &str, f: impl FnMut() -> Option<T>, dump: impl Fn() -> String) -> T {
-    poll(what, f, dump, show())
+    poll(what, f, dump, true)
 }
 
 fn poll<T>(what: &str, mut f: impl FnMut() -> Option<T>, dump: impl Fn() -> String, show: bool) -> T {
