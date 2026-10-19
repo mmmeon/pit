@@ -1,0 +1,3 @@
+[alias]
+# The tests that start a real gpg-agent.
+test-gpg = "test --test gpg_agent -- --ignored"
