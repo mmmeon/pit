@@ -60,12 +60,15 @@ pub fn is_agent_proxy(pid: u32) -> bool {
         .collect();
     let Ok(table) = fs::read_to_string("/proc/net/unix") else { return false };
     // Num RefCount Protocol Flags Type St Inode Path; 0x10000 is listening.
+    // The path may hold spaces, so its name is taken from the end of the
+    // line. Any of the agent's sockets will do: .ssh, .extra and .browser
+    // are proxied just the same.
     table.lines().skip(1).any(|l| {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        f.len() >= 8
+        let f: Vec<&str> = l.split_whitespace().take(7).collect();
+        f.len() == 7
             && u32::from_str_radix(f[3].trim_start_matches("0x"), 16).is_ok_and(|fl| fl & 0x10000 != 0)
             && inodes.iter().any(|i| i == f[6])
-            && f[7].rsplit('/').next().is_some_and(|n| n.starts_with("S.gpg-agent"))
+            && l.rsplit('/').next().is_some_and(|n| n.starts_with("S.gpg-agent"))
     })
 }
 
@@ -177,14 +180,6 @@ fn stat(pid: u32, n: usize) -> Option<i64> {
     rest.split_whitespace().nth(n)?.parse().ok()
 }
 
-/// Whether `pid` or one of its parents has the terminal `tty` as its own: the
-/// command typed there is, or waits on, a process like that. One that doesn't
-/// (a daemon, a proxy in front of the agent) isn't who asked on `tty`.
-pub fn under_tty(pid: u32, tty: &str) -> bool {
-    let Ok(dev) = fs::metadata(tty).map(|m| m.rdev()) else { return false };
-    ancestors(pid).into_iter().any(|p| stat(p, 4).is_some_and(|t| t as u64 == dev))
-}
-
 /// Whether `pid` runs on the terminal `tty` and is in its foreground: the
 /// command typed there is still waiting on it, not the shell prompt or
 /// another job.
@@ -288,14 +283,6 @@ mod tests {
     fn ordinary_processes_are_not_agent_proxies() {
         assert!(!is_agent_proxy(std::process::id()));
         assert!(!is_agent_proxy(u32::MAX));
-    }
-
-    #[test]
-    fn under_tty_needs_a_terminal() {
-        let me = std::process::id();
-        assert!(!under_tty(me, "/dev/null"));
-        assert!(!under_tty(me, "/nonexistent"));
-        assert!(!under_tty(u32::MAX, "/dev/tty"));
     }
 
     #[test]

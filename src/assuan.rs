@@ -77,9 +77,10 @@ struct State {
     timeout: u64,
     // OPTIONs survive RESET.
     ttyname: Option<String>,
-    /// The requesting process, from `owner`, when it's on this host.
+    /// The process that connected to the agent, from `owner`, when it's on
+    /// this host.
     owner: Option<u32>,
-    /// `owner` was a proxy in front of the agent, not who asked.
+    /// `owner` is a proxy in front of the agent, not who asked.
     proxied: bool,
     ttytype: Option<String>,
     default_ok: Option<String>,
@@ -95,9 +96,8 @@ impl State {
         match name.to_ascii_lowercase().as_str() {
             "ttyname" => self.ttyname = value,
             "owner" => {
-                let pid = value.as_deref().and_then(origin::owner_pid);
-                self.proxied = pid.is_some_and(origin::is_agent_proxy);
-                self.owner = pid.filter(|_| !self.proxied);
+                self.owner = value.as_deref().and_then(origin::owner_pid);
+                self.proxied = self.owner.is_some_and(origin::is_agent_proxy);
             }
             "ttytype" => self.ttytype = value,
             "default-ok" => self.default_ok = value,
@@ -105,6 +105,11 @@ impl State {
             "default-prompt" => self.default_prompt = value,
             _ => {}
         }
+    }
+
+    /// Who asked, when the agent's client says: not a proxy in front of it.
+    fn requester(&self) -> Option<u32> {
+        self.owner.filter(|_| !self.proxied)
     }
 
     fn request(&self, kind: Kind) -> Request {
@@ -146,20 +151,18 @@ impl State {
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }
-        // What asks on a terminal runs on it, or under something that does: if
-        // the owner doesn't, it's a stand-in (a proxy, a daemon), not who asked.
-        let owner = self.owner.filter(|&p| self.ttyname.as_deref().is_none_or(|t| origin::under_tty(p, t)));
+        let owner = self.requester();
         // The popup can land far from the command that asked; say which.
-        // The hook is told too, wherever it's asked. Without an owner, the
-        // terminal still says where.
-        let standin = self.proxied || self.owner.is_some() && owner.is_none();
+        // The hook is told too, wherever it's asked. The owner is who asked
+        // even off the terminal gpg names, which may be stale ("not a tty",
+        // or ssh's last UPDATESTARTUPTTY).
         req.origin = match (owner, self.ttyname.as_deref()) {
             (Some(pid), _) => origin::find(pid).label(),
             // Behind a proxy, the terminal says who, if there is one.
-            (None, Some(t)) if standin && origin::is_tty(t) => origin::find_tty(t).label(),
+            (None, Some(t)) if self.proxied && origin::is_tty(t) => origin::find_tty(t).label(),
             // Otherwise whoever's looking at the client the popup goes to is
             // likely who asked, but it's a guess.
-            (None, _) if standin => tmux::find_client()
+            (None, _) if self.proxied => tmux::find_client()
                 .and_then(|c| tmux::active_pane_tty(&c))
                 .and_then(|t| origin::find_tty(&t).label())
                 .map(|l| format!("{l} ?")),
@@ -176,8 +179,9 @@ impl State {
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
         // Something else reading keys there would get some of them, and
         // they're a passphrase: a full-screen program, or another command.
-        // An owner off this terminal still counts here: it can't be told apart
-        // from a reader, and giving away keys is the worse mistake.
+        // A proxy still counts here: it isn't in the terminal's foreground, so
+        // whatever is reading there is taken for another reader, and giving
+        // away keys is the worse mistake.
         let asker = self.owner;
         let free = |t: &File| {
             sys::line_mode(t.as_raw_fd()) && t.metadata().is_ok_and(|m| !origin::other_reader(m.rdev(), asker))
@@ -407,6 +411,20 @@ mod tests {
 
     fn ok(st: &mut State, line: &str) {
         assert_eq!(run(st, line), (String::new(), Ok(())), "{line}");
+    }
+
+    #[test]
+    fn owner_is_who_asked_off_its_terminal() {
+        let mut st = State::default();
+        let me = std::process::id();
+        ok(&mut st, "OPTION ttyname=not a tty");
+        ok(&mut st, &format!("OPTION owner={me}/{}", sys::uid()));
+        assert!(!st.proxied);
+        assert_eq!(st.requester(), Some(me));
+        // A proxy is still the owner for the reader check, but not who asked.
+        st.proxied = true;
+        assert_eq!(st.owner, Some(me));
+        assert_eq!(st.requester(), None);
     }
 
     #[test]
