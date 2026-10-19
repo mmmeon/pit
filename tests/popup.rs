@@ -559,6 +559,51 @@ fn slow_hook_does_not_hold_up_the_prompt() {
     std::fs::remove_file(&pid).unwrap();
 }
 
+/// Runs the hook at PIT_TEST_HOOK through every kind of prompt, each
+/// answered after a pause, to see what it does with real events:
+///   PIT_TEST_HOOK=hooks/notify-send cargo test --test popup try_a_hook
+/// Passes without doing anything when unset.
+#[test]
+fn try_a_hook() {
+    let Some(path) = std::env::var_os("PIT_TEST_HOOK") else { return };
+    require_tmux!();
+    let path = std::fs::canonicalize(path).expect("PIT_TEST_HOOK");
+    let pause = || thread::sleep(Duration::from_secs(2));
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    hook(&sb, &path.display().to_string());
+
+    s.p.setup(&["SETTITLE Unlock", DESC]);
+    s.p.start("GETPIN");
+    s.pty().wait_text("PIN:");
+    pause();
+    s.pty().send("hunter2\r");
+    assert_eq!(s.p.finish(), ["D hunter2", "OK"]);
+    pause();
+
+    s.p.setup(&["SETDESC Allow access?", "SETOK _Allow", "SETNOTOK _Deny"]);
+    s.p.start("CONFIRM");
+    s.pty().wait_text("Allow access?");
+    pause();
+    s.pty().send("a");
+    assert_eq!(s.p.finish(), ["OK"]);
+    pause();
+
+    s.p.setup(&["SETDESC Card removed"]);
+    s.p.start("MESSAGE");
+    s.pty().wait_text("Card removed");
+    pause();
+    s.pty().send("\r");
+    assert_eq!(s.p.finish(), ["OK"]);
+    pause();
+
+    let (pane, _) = asked_from_window(&mut s, "sleep 999", "sleep");
+    pause();
+    answer_in_pane(&s, &pane, "hunter2");
+    assert_eq!(s.p.finish(), ["D hunter2", "OK"]);
+    pause();
+}
+
 #[test]
 fn another_reader_in_the_job_gets_a_popup() {
     require_tmux!();

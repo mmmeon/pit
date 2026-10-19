@@ -1,0 +1,26 @@
+#!/bin/sh
+# pit hook: a desktop notification while a prompt is open, withdrawn when it
+# closes. PIT_ORIGIN is left out on purpose: a command line can hold secrets
+# and notification daemons keep a history.
+#
+#   hook = '~/path/to/notify-send'
+
+dir=${XDG_RUNTIME_DIR:-/tmp}/pit
+# one id file per prompt location, so overlapping prompts don't clash
+id_file=$dir/notify-$(printf '%s' "$PIT_WHERE" | tr -c 'A-Za-z0-9' _)
+
+case $PIT_EVENT in
+open)
+	mkdir -p "$dir" || exit
+	notify-send -p -a pit -i dialog-password -u critical \
+		"gpg wants a passphrase" "$PIT_TITLE" >"$id_file"
+	;;
+close)
+	[ -s "$id_file" ] || exit 0
+	gdbus call --session --dest org.freedesktop.Notifications \
+		--object-path /org/freedesktop/Notifications \
+		--method org.freedesktop.Notifications.CloseNotification \
+		"$(cat "$id_file")" >/dev/null
+	rm -f "$id_file"
+	;;
+esac
