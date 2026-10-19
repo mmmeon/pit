@@ -1,0 +1,7 @@
+--- inline
+~/src/notes $ git commit -S -m 'Fix typo'
+ Please enter the passphrase to unlock the OpenPGP secret key
+ "Alice <alice@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2
+ created 2024-03-01.
+ Passphrase: [•·•·]
+

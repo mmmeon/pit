@@ -1,0 +1,44 @@
+--- wrong passphrase
+┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+│ Please enter the passphrase to unlock the OpenPGP secret key: │
+│ "Alice <alice@example.org>"                                   │
+│ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
+│ created 2024-03-01.                                           │
+│                                                               │
+│ Bad Passphrase (try 2 of 3)                                   │
+│ Passphrase: [····]                                            │
+└───────────────────────────────────────────────────────────────┘
+
+--- new passphrase, repeat
+┌─ gpg · git commit -S @ work:2.0 ─────────────────┐
+│ Please enter a passphrase to protect the new key │
+│                                                  │
+│                                                  │
+│ Repeat: [•·•·]                                   │
+└──────────────────────────────────────────────────┘
+
+--- new passphrase, mismatch
+┌─ gpg · git commit -S @ work:2.0 ─────────────────┐
+│ Please enter a passphrase to protect the new key │
+│                                                  │
+│ does not match - try again                       │
+│ Passphrase: [····]                               │
+└──────────────────────────────────────────────────┘
+
+--- confirm
+┌─ gpg · git commit -S @ work:2.0 ───────────────────┐
+│ An ssh process requested the use of key            │
+│ SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE │
+│ (alice@laptop)                                     │
+│ Do you want to allow this?                         │
+│                                                    │
+│ ⏎ Allow   d Deny   esc Cancel                      │
+└────────────────────────────────────────────────────┘
+
+--- message
+┌─ gpg · git commit -S @ work:2.0 ─────────┐
+│ No card found. Insert your OpenPGP card. │
+│                                          │
+│ ⏎ OK                                     │
+└──────────────────────────────────────────┘
+

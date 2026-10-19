@@ -1,0 +1,3 @@
+--- other client
+pinentry: gpg - prompt open on /dev/pts/N
+

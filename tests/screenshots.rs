@@ -1,8 +1,11 @@
-//! Text screenshots of each mode, for the readme. Not a test:
-//!   cargo test --test screenshots -- --ignored --nocapture --test-threads=1
+//! Text screenshots of each mode, kept in tests/screenshots/ for the readme.
+//! A test fails when its screenshots change, and writes the new ones there:
+//! look them over with git diff, and run it again.
 
 mod common;
 
+use std::fs;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
@@ -18,12 +21,50 @@ fn rows(screen: &vt100::Screen) -> Vec<String> {
     screen.rows(0, cols).map(|r| r.trim_end().to_string()).collect()
 }
 
-fn print(name: &str, lines: &[String]) {
-    println!("--- {name}");
-    for l in lines {
-        println!("{l}");
+/// One test's screenshots, checked against tests/screenshots/<test>.txt.
+struct Shots {
+    test: &'static str,
+    text: String,
+}
+
+impl Shots {
+    fn new(test: &'static str) -> Shots {
+        Shots { test, text: String::new() }
     }
-    println!();
+
+    fn add(&mut self, name: &str, lines: &[String]) {
+        self.text += &format!("--- {name}\n");
+        for l in lines {
+            self.text += &steady(l);
+            self.text += "\n";
+        }
+        self.text += "\n";
+    }
+
+    /// Fails if the screenshots changed, writing the new ones.
+    fn check(self) {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/screenshots/{}.txt", self.test));
+        let old = fs::read_to_string(&path).ok();
+        if old.as_deref() == Some(&self.text) {
+            return;
+        }
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &self.text).unwrap();
+        assert!(old.is_none(), "{} changed: look it over with git diff, and run again\n{}", path.display(), self.text);
+    }
+}
+
+/// The marker echo changes at random on each key: show any typed-in one as
+/// the same.
+fn steady(line: &str) -> String {
+    let mut chars: Vec<char> = line.chars().collect();
+    for i in 0..chars.len().saturating_sub(5) {
+        let marker = &chars[i + 1..i + 5];
+        if chars[i] == '[' && chars[i + 5] == ']' && marker.iter().all(|c| "•·".contains(*c)) && marker.contains(&'•') {
+            chars.splice(i + 1..i + 5, "•·•·".chars());
+        }
+    }
+    chars.into_iter().collect()
 }
 
 /// The popup's rows, and with `status` everything below it too.
@@ -88,14 +129,28 @@ fn descendants(pid: u32) -> Vec<u32> {
     children.split_whitespace().filter_map(|c| c.parse().ok()).flat_map(|c| [vec![c], descendants(c)].concat()).collect()
 }
 
-/// Lets the last keys draw.
-fn settle() {
-    thread::sleep(Duration::from_millis(300));
+/// Waits for the screen to stop changing, and returns it.
+fn still(pty: &Pty) -> vt100::Screen {
+    let mut last = pty.screen();
+    wait_until("screen to settle", || {
+        thread::sleep(Duration::from_millis(200));
+        let now = pty.screen();
+        let same = now.contents() == last.contents();
+        last = now.clone();
+        same.then_some(now)
+    }, || pty.dump())
+}
+
+/// Waits for typed keys to show in the marker echo.
+fn typed(pty: &Pty) -> vt100::Screen {
+    pty.wait_gone("[····]");
+    still(pty)
 }
 
 #[test]
-#[ignore]
 fn styles() {
+    require_tmux!();
+    let mut shots = Shots::new("styles");
     for style in ["bar", "box", "line"] {
         let sb = Sandbox::new();
         let d = Desk::new(&sb);
@@ -105,16 +160,17 @@ fn styles() {
         p.start("GETPIN");
         d.client.pty.wait_text("Passphrase:");
         d.client.pty.send("hunter2");
-        settle();
-        print(&format!("style {style}"), &popup(&d.client.pty.screen(), style == "bar"));
+        shots.add(&format!("style {style}"), &popup(&typed(&d.client.pty), style == "bar"));
         d.client.pty.send("\x1b");
         p.finish();
     }
+    shots.check();
 }
 
 #[test]
-#[ignore]
 fn echoes() {
+    require_tmux!();
+    let mut shots = Shots::new("echoes");
     for echo in ["marker", "dots", "none"] {
         let sb = Sandbox::new();
         let d = Desk::new(&sb);
@@ -124,24 +180,30 @@ fn echoes() {
         p.start("GETPIN");
         d.client.pty.wait_text("Passphrase:");
         d.client.pty.send("hunter2");
-        settle();
-        print(&format!("echo {echo}"), &popup(&d.client.pty.screen(), false));
+        let screen = match echo {
+            "marker" => typed(&d.client.pty),
+            "dots" => {
+                d.client.pty.wait_text("•••••••");
+                still(&d.client.pty)
+            }
+            _ => still(&d.client.pty),
+        };
+        shots.add(&format!("echo {echo}"), &popup(&screen, false));
         d.client.pty.send("\x1b");
         p.finish();
     }
+    shots.check();
 }
 
 #[test]
-#[ignore]
 fn dialogs() {
+    require_tmux!();
     let sb = Sandbox::new();
     let d = Desk::new(&sb);
     sb.config("[tmux]\nstyle = \"box\"");
     let pty = &d.client.pty;
-    let shot = |name: &str| {
-        settle();
-        print(name, &popup(&pty.screen(), false));
-    };
+    let mut shots = Shots::new("dialogs");
+    let mut shot = |name: &str| shots.add(name, &popup(&still(pty), false));
 
     let mut p = d.pinentry();
     p.setup(&[DESC, "SETPROMPT Passphrase:", "SETERROR Bad Passphrase (try 2 of 3)"]);
@@ -164,6 +226,7 @@ fn dialogs() {
     pty.send("hunter2\r");
     pty.wait_text("Repeat:");
     pty.send("hunter3");
+    pty.wait_gone("Repeat: [····]");
     shot("new passphrase, repeat");
     pty.send("\r");
     pty.wait_text("does not match");
@@ -194,11 +257,12 @@ fn dialogs() {
     shot("message");
     pty.send("\r");
     p.finish();
+    shots.check();
 }
 
 #[test]
-#[ignore]
 fn other_client() {
+    require_tmux!();
     let sb = Sandbox::new();
     let d = Desk::new(&sb);
     d.tmux.set("display-time", "10000");
@@ -212,14 +276,17 @@ fn other_client() {
     p.setup(&[DESC]);
     p.start("GETPIN");
     other.pty.wait_text("prompt open on");
-    let rows = rows(&other.pty.screen());
-    print("other client", &rows[rows.len() - 1..]);
+    let rows = rows(&still(&other.pty));
+    // The client's tty differs from run to run.
+    let (msg, _) = rows[rows.len() - 1].split_once("/dev/pts/").unwrap();
+    let mut shots = Shots::new("other_client");
+    shots.add("other client", &[format!("{msg}/dev/pts/N")]);
+    shots.check();
     d.client.pty.send("\x1b");
     p.finish();
 }
 
 #[test]
-#[ignore]
 fn inline() {
     let sb = Sandbox::new();
     let pty = Pty::new(8, COLS);
@@ -229,12 +296,13 @@ fn inline() {
     p.start("GETPIN");
     pty.wait_text("Passphrase:");
     pty.send("hunter2");
-    settle();
-    let mut rows = rows(&pty.screen());
+    let mut rows = rows(&typed(&pty));
     while rows.last().is_some_and(String::is_empty) {
         rows.pop();
     }
-    print("inline", &rows);
+    let mut shots = Shots::new("inline");
+    shots.add("inline", &rows);
+    shots.check();
     pty.send("\x1b");
     p.finish();
 }
