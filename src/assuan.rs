@@ -107,9 +107,13 @@ impl State {
         }
     }
 
-    /// Who asked, when the agent's client says: not a proxy in front of it.
+    /// Who asked, when the agent's client says: it, or behind a proxy in
+    /// front of the agent, the proxy's client, if that's clear.
     fn requester(&self) -> Option<u32> {
-        self.owner.filter(|_| !self.proxied)
+        match self.owner {
+            Some(proxy) if self.proxied => origin::proxy_client(proxy, self.ttyname.as_deref()),
+            owner => owner,
+        }
     }
 
     fn request(&self, kind: Kind) -> Request {
@@ -122,6 +126,7 @@ impl State {
             echo: Echo::default(),
             title: self.title.clone().unwrap_or_else(|| "gpg".into()),
             origin: String::new(),
+            guess: false,
             desc: self.desc.clone().unwrap_or_default(),
             prompt: pick(&self.prompt, &self.default_prompt, "PIN:"),
             error: self.error.clone().unwrap_or_default(),
@@ -135,8 +140,8 @@ impl State {
         }
     }
 
-    /// Asks the user. None means there's nowhere to ask.
-    fn ask(&mut self, kind: Kind) -> io::Result<Option<Outcome>> {
+    /// Asks the user. Err says why there's nowhere to ask.
+    fn ask(&mut self, kind: Kind) -> io::Result<Result<Outcome, String>> {
         let cfg = Config::load();
         let mut req = self.request(kind);
         req.echo = cfg.echo;
@@ -156,16 +161,17 @@ impl State {
         // The hook is told too, wherever it's asked. The owner is who asked
         // even off the terminal gpg names, which may be stale ("not a tty",
         // or ssh's last UPDATESTARTUPTTY).
+        // Behind a proxy whose client isn't clear, where it likely is is a
+        // guess, and only the pane is named.
+        req.guess = self.proxied && owner.is_none();
         req.origin = match (owner, self.ttyname.as_deref()) {
-            (Some(pid), _) => origin::find(pid).label(),
-            // Behind a proxy, the terminal says who, if there is one.
-            (None, Some(t)) if self.proxied && origin::is_tty(t) => origin::find_tty(t).label(),
-            // Otherwise whoever's looking at the client the popup goes to is
-            // likely who asked, but it's a guess.
-            (None, _) if self.proxied => tmux::find_client()
+            (Some(pid), _) => origin::find(pid, cfg.full_origin).label(),
+            // The terminal gpg names, if there is one, though it may be stale.
+            (None, Some(t)) if req.guess && origin::is_tty(t) => origin::find_tty(t).label(),
+            // Otherwise the pane the popup's client is looking at.
+            (None, _) if req.guess => tmux::find_client()
                 .and_then(|c| tmux::active_pane_tty(&c))
-                .and_then(|t| origin::find_tty(&t).label())
-                .map(|l| format!("{l} ?")),
+                .and_then(|t| origin::find_tty(&t).label()),
             (None, _) => None,
         }
         .unwrap_or_default();
@@ -179,10 +185,10 @@ impl State {
         let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
         // Something else reading keys there would get some of them, and
         // they're a passphrase: a full-screen program, or another command.
-        // A proxy still counts here: it isn't in the terminal's foreground, so
-        // whatever is reading there is taken for another reader, and giving
-        // away keys is the worse mistake.
-        let asker = self.owner;
+        // A proxy whose client isn't clear still counts here: it isn't in
+        // the terminal's foreground, so whatever is reading there is taken
+        // for another reader, and giving away keys is the worse mistake.
+        let asker = owner.or(self.owner);
         let free = |t: &File| {
             sys::line_mode(t.as_raw_fd()) && t.metadata().is_ok_and(|m| !origin::other_reader(m.rdev(), asker))
         };
@@ -209,7 +215,7 @@ impl State {
             let lay = ui::layout(&req, client.width.saturating_sub(4));
             req.width = lay.width;
             if let Some(outcome) = tmux::prompt(&client, &req, &lay, cfg.hook.as_deref())? {
-                return Ok(Some(outcome));
+                return Ok(Ok(outcome));
             }
         }
 
@@ -219,16 +225,23 @@ impl State {
         let tty = match tty {
             Some(tty) => tty,
             None => {
-                let Some(ttyname) = &self.ttyname else { return Ok(None) };
+                let Some(ttyname) = &self.ttyname else {
+                    return Ok(Err("no tmux client for a popup, and no terminal to ask on".into()));
+                };
                 // A pane only on the terms above, short of the command being
                 // in the foreground: never when inline prompts are off, nor
                 // over something full-screen.
                 if outside.is_none() && !(cfg.inline && tmux::pane_idle(ttyname)) {
-                    return Ok(None);
+                    return Ok(Err("no popup, and the pane is busy or inline prompts are off".into()));
                 }
                 let tty = open(ttyname)?;
                 if !free(&tty) {
-                    return Ok(None);
+                    let why = "the terminal is in use by a full-screen program or another command";
+                    return Ok(Err(if self.proxied && owner.is_none() {
+                        format!("{why}, which can't be told apart from who asked through the proxy in front of gpg-agent")
+                    } else {
+                        why.into()
+                    }));
                 }
                 tty
             }
@@ -239,7 +252,7 @@ impl State {
         let hook = Hook::open(cfg.hook.as_deref(), &req, &place);
         let outcome = ui::run(&tty, &req, None, true);
         drop(hook);
-        outcome.map(Some)
+        outcome.map(Ok)
     }
 }
 
@@ -270,11 +283,8 @@ fn data(out: &mut impl Write, value: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn no_pinentry(e: Option<io::Error>) -> Result<(), Failure> {
-    match e {
-        Some(e) => fail(ERR_NO_PIN_ENTRY, &format!("No pinentry ({e})")),
-        None => fail(ERR_NO_PIN_ENTRY, "No pinentry (not in tmux, and no tty or it is in use)"),
-    }
+fn no_pinentry(why: impl std::fmt::Display) -> Result<(), Failure> {
+    fail(ERR_NO_PIN_ENTRY, &format!("No pinentry ({why})"))
 }
 
 /// Serves gpg-agent on stdin/stdout. `args` are our command-line flags,
@@ -365,17 +375,17 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
         }
         "GETPIN" => {
             return Ok(match st.ask(Kind::Pin) {
-                Ok(Some(Outcome::Pin { pin, repeated })) => {
+                Ok(Ok(Outcome::Pin { pin, repeated })) => {
                     if repeated {
                         writeln!(out, "S PIN_REPEATED")?;
                     }
                     data(out, &pin.0)?;
                     Ok(())
                 }
-                Ok(Some(Outcome::Timeout)) => fail(ERR_TIMEOUT, "Timeout"),
-                Ok(Some(_)) => fail(ERR_CANCELED, "Operation cancelled"),
-                Ok(None) => no_pinentry(None),
-                Err(e) => no_pinentry(Some(e)),
+                Ok(Ok(Outcome::Timeout)) => fail(ERR_TIMEOUT, "Timeout"),
+                Ok(Ok(_)) => fail(ERR_CANCELED, "Operation cancelled"),
+                Ok(Err(why)) => no_pinentry(why),
+                Err(e) => no_pinentry(e),
             });
         }
         "CONFIRM" | "MESSAGE" => {
@@ -384,13 +394,13 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
                 _ => Kind::Message,
             };
             return Ok(match st.ask(kind) {
-                Ok(Some(Outcome::Timeout)) => fail(ERR_TIMEOUT, "Timeout"),
-                Ok(Some(_)) if kind == Kind::Message => Ok(()),
-                Ok(Some(Outcome::Ok)) => Ok(()),
-                Ok(Some(Outcome::NotOk)) => fail(ERR_NOT_CONFIRMED, "Not confirmed"),
-                Ok(Some(_)) => fail(ERR_CANCELED, "Operation cancelled"),
-                Ok(None) => no_pinentry(None),
-                Err(e) => no_pinentry(Some(e)),
+                Ok(Ok(Outcome::Timeout)) => fail(ERR_TIMEOUT, "Timeout"),
+                Ok(Ok(_)) if kind == Kind::Message => Ok(()),
+                Ok(Ok(Outcome::Ok)) => Ok(()),
+                Ok(Ok(Outcome::NotOk)) => fail(ERR_NOT_CONFIRMED, "Not confirmed"),
+                Ok(Ok(_)) => fail(ERR_CANCELED, "Operation cancelled"),
+                Ok(Err(why)) => no_pinentry(why),
+                Err(e) => no_pinentry(e),
             });
         }
         _ => return Ok(fail(ERR_ASS_UNKNOWN_CMD, "Unknown IPC command")),

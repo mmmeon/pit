@@ -288,3 +288,50 @@ fn another_reader_in_the_foreground_is_not_asked() {
     let _ = cat.kill();
     let _ = cat.wait();
 }
+
+fn ask_through(p: &mut Pinentry, proxy: &Proxy) -> Vec<String> {
+    let uid = unsafe { libc::getuid() };
+    p.setup(&[&format!("OPTION owner={}/{uid}", proxy.pid)]);
+    p.start("GETPIN");
+    p.finish()
+}
+
+#[test]
+fn client_behind_a_proxy_is_asked_on_its_terminal() {
+    // gpg-agent names the proxy, but the command it passes on for runs here
+    // in the foreground: it's the one reading, not another command.
+    let (sb, pty, mut p) = setup();
+    let proxy = Proxy::start(&sb);
+    let _client = proxy.spawn(pty.command("sleep").arg("999"));
+    let uid = unsafe { libc::getuid() };
+    p.setup(&[&format!("OPTION owner={}/{uid}", proxy.pid)]);
+    p.start("GETPIN");
+    pty.wait_text("PIN:");
+    pty.send("ok\r");
+    assert_eq!(p.finish(), ["D ok", "OK"]);
+}
+
+#[test]
+fn client_behind_a_proxy_elsewhere_is_not_asked_over_a_reader() {
+    let (sb, pty, mut p) = setup();
+    let proxy = Proxy::start(&sb);
+    let null = std::process::Stdio::null;
+    let _client = proxy.spawn(std::process::Command::new("sleep").arg("999").stdout(null()).stderr(null()));
+    let _cat = Killed(pty.command("cat").spawn().unwrap());
+    let reply = ask_through(&mut p, &proxy);
+    assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY));
+    assert!(reply[0].contains("in use by") && !reply[0].contains("proxy"), "{reply:?}");
+    assert!(!pty.text().contains("PIN:"));
+}
+
+#[test]
+fn unknown_client_behind_a_proxy_is_not_asked_and_says_why() {
+    // With no client to tell from it, sleep could be another reader.
+    let (sb, pty, mut p) = setup();
+    let proxy = Proxy::start(&sb);
+    let _sleep = Killed(pty.command("sleep").arg("999").spawn().unwrap());
+    let reply = ask_through(&mut p, &proxy);
+    assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY));
+    assert!(reply[0].contains("proxy in front of gpg-agent"), "{reply:?}");
+    assert!(!pty.text().contains("PIN:"));
+}

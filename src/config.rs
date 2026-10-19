@@ -2,6 +2,7 @@
 //! ~/.config/pit/config.toml), read for each prompt so edits apply at once:
 //!
 //!   echo = "marker"       # marker|dots|none
+//!   origin = "short"      # short|full, the command named in the title
 //!   hook = '<command>'    # run on a prompt opening and closing
 //!   [tmux]
 //!   style = "bar"         # bar|box|line, for the popup
@@ -21,6 +22,9 @@ use crate::ui::{Echo, Request, Style};
 pub struct Config {
     pub echo: Echo,
     pub hook: Option<String>,
+    /// Whether to name the command that asked with its whole command line,
+    /// not only the program and subcommand.
+    pub full_origin: bool,
     pub style: Style,
     /// Whether a pane may be asked in place, instead of in a popup.
     pub inline: bool,
@@ -28,7 +32,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        Config { echo: Echo::default(), hook: None, style: Style::default(), inline: true }
+        Config { echo: Echo::default(), hook: None, full_origin: false, style: Style::default(), inline: true }
     }
 }
 
@@ -48,6 +52,11 @@ impl Config {
             match key.as_str() {
                 "echo" => c.echo = Echo::parse(&v).unwrap_or(c.echo),
                 "hook" => c.hook = Some(v).filter(|v| !v.trim().is_empty()),
+                "origin" => match v.as_str() {
+                    "short" => c.full_origin = false,
+                    "full" => c.full_origin = true,
+                    _ => {}
+                },
                 "tmux.style" => c.style = Style::parse(&v).unwrap_or(c.style),
                 "tmux.inline" => match v.as_str() {
                     "auto" => c.inline = true,
@@ -185,6 +194,7 @@ impl Hook {
             .args(["-c", BOTH, "sh", cmd])
             .env("PIT_TITLE", &req.title)
             .env("PIT_ORIGIN", &req.origin)
+            .env("PIT_ORIGIN_GUESS", if req.guess { "1" } else { "" })
             .env("PIT_WHERE", place)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -215,23 +225,25 @@ mod tests {
     #[test]
     fn all_settings() {
         let c = Config::parse(
-            "# pit\necho = \"dots\"\nhook = 'notify-send hi'\n\n[tmux]\nstyle = \"box\" # centred\ninline = 'never'\n",
+            "# pit\necho = \"dots\"\norigin = \"full\"\nhook = 'notify-send hi'\n\n[tmux]\nstyle = \"box\" # centred\ninline = 'never'\n",
         );
         assert_eq!((c.echo, c.hook.as_deref(), c.style, c.inline), (Echo::Dots, Some("notify-send hi"), Style::Box, false));
+        assert!(c.full_origin);
     }
 
     #[test]
     fn defaults_when_empty() {
         let c = Config::parse("");
         assert_eq!((c.echo, c.hook, c.style, c.inline), (Echo::Marker, None, Style::Bar, true));
+        assert!(!c.full_origin);
     }
 
     #[test]
     fn bad_and_unknown_keys_are_skipped() {
         let c = Config::parse(
-            "echo = dots\nstyle = \"box\"\n[tmux]\nstyle = \"round\"\ninline = \"never\" trailing\n[tmux\ninline = \"never\"\n",
+            "echo = dots\norigin = \"everything\"\nstyle = \"box\"\n[tmux]\nstyle = \"round\"\ninline = \"never\" trailing\n[tmux\ninline = \"never\"\n",
         );
-        assert_eq!((c.echo, c.style, c.inline), (Echo::Marker, Style::Bar, true));
+        assert_eq!((c.echo, c.style, c.inline, c.full_origin), (Echo::Marker, Style::Bar, true, false));
     }
 
     #[test]

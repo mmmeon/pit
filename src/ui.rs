@@ -93,6 +93,8 @@ pub struct Request {
     pub title: String,
     /// The command and pane that asked, if known.
     pub origin: String,
+    /// `origin` is a guess at who asked, not known.
+    pub guess: bool,
     pub desc: String,
     pub prompt: String,
     pub error: String,
@@ -117,6 +119,9 @@ impl Request {
         put("echo", self.echo.name());
         put("title", &self.title);
         put("origin", &self.origin);
+        if self.guess {
+            put("guess", "");
+        }
         put("desc", &self.desc);
         put("prompt", &self.prompt);
         put("error", &self.error);
@@ -145,6 +150,7 @@ impl Request {
                 "echo" => req.echo = Echo::parse(&value)?,
                 "title" => req.title = value,
                 "origin" => req.origin = value,
+                "guess" => req.guess = true,
                 "desc" => req.desc = value,
                 "prompt" => req.prompt = value,
                 "error" => req.error = value,
@@ -393,7 +399,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             let desc = wrap_parts(parts, " · ", max);
             let error_row = err_w.map(|_| desc.len());
             let input_row = desc.len() + usize::from(err_w.is_some());
-            let title = title(&head, &req.origin, max);
+            let title = title(&head, &req.origin, req.guess, max);
             Layout { title, desc, error_row, input_row, rows: input_row + 1, width: max }
         }
         Style::Box => {
@@ -403,7 +409,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             let top = desc.len() + usize::from(!desc.is_empty());
             let error_row = err_w.map(|_| top);
             let input_row = top + usize::from(err_w.is_some());
-            let title = title(&head, &req.origin, w);
+            let title = title(&head, &req.origin, req.guess, w);
             Layout { title, desc, error_row, input_row, rows: input_row + 1, width: w }
         }
         Style::Line => {
@@ -414,7 +420,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             // Sized without the origin, which may then be cut.
             let line_w = err_w.map_or(0, |w| w + 2) + input_w;
             let w = line_w.max(width(&bare) + 2).clamp(30.min(max), max);
-            let title = title(bare.trim_end(), &req.origin, w);
+            let title = title(bare.trim_end(), &req.origin, req.guess, w);
             Layout { title, desc: Vec::new(), error_row: None, input_row: 0, rows: 1, width: w }
         }
     }
@@ -423,18 +429,19 @@ pub fn layout(req: &Request, max: usize) -> Layout {
 /// Fewest columns of the origin worth showing in a title.
 const MIN_ORIGIN: usize = 8;
 
-/// The border title in `w` columns: `head`, then the origin. tmux would cut
-/// it mid-separator, so the origin is cut here, or left out if too little of
-/// it would show.
-fn title(head: &str, origin: &str, w: usize) -> String {
+/// The border title in `w` columns: `head`, then the origin, marked if it's
+/// a `guess`. tmux would cut it mid-separator, so the origin is cut here,
+/// keeping the mark, or left out if too little of it would show.
+fn title(head: &str, origin: &str, guess: bool, w: usize) -> String {
     let cut = |s: &str, w| render(&[("", s.to_string())], w);
-    let full = if origin.is_empty() { format!("{head} ") } else { format!("{head} · {origin} ") };
+    let mark = if guess { " ?" } else { "" };
+    let full = if origin.is_empty() { format!("{head} ") } else { format!("{head} · {origin}{mark} ") };
     if width(&full) <= w {
         return full;
     }
-    let room = w.saturating_sub(width(head) + width(" ·  "));
+    let room = w.saturating_sub(width(head) + width(" ·  ") + width(mark));
     if !origin.is_empty() && room >= MIN_ORIGIN {
-        return format!("{head} · {} ", cut(origin, room));
+        return format!("{head} · {}{mark} ", cut(origin, room));
     }
     format!("{} ", cut(head, w.saturating_sub(1)))
 }
@@ -802,6 +809,7 @@ mod tests {
             echo: Echo::Dots,
             title: "Unlock key".into(),
             origin: String::new(),
+            guess: false,
             desc: "Please enter the passphrase for\n\"Alice <a@x>\"\n100% sure? 漢字".into(),
             prompt: "Pass phrase:".into(),
             error: "Bad\rpassphrase".into(),
@@ -837,10 +845,10 @@ mod tests {
 
     #[test]
     fn request_round_trips_optional_fields() {
-        for (repeat, notok) in [(None, None), (Some(String::new()), Some(String::new()))] {
-            let req = Request { repeat: repeat.clone(), notok: notok.clone(), ..full_request() };
+        for (repeat, notok, guess) in [(None, None, false), (Some(String::new()), Some(String::new()), true)] {
+            let req = Request { repeat: repeat.clone(), notok: notok.clone(), guess, ..full_request() };
             let back = Request::decode(&req.encode()).unwrap();
-            assert_eq!((back.repeat, back.notok), (repeat, notok));
+            assert_eq!((back.repeat, back.notok, back.guess), (repeat, notok, guess));
         }
         for kind in [Kind::Pin, Kind::Confirm, Kind::Message] {
             for style in [Style::Bar, Style::Box, Style::Line] {
@@ -1062,15 +1070,21 @@ mod tests {
 
     #[test]
     fn title_fits_its_border() {
-        assert_eq!(title(" Unlock", "git commit @ work:2.1", 40), " Unlock · git commit @ work:2.1 ");
-        assert_eq!(title(" Unlock", "git commit @ work:2.1", 22), " Unlock · git commit… ");
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 40), " Unlock · git commit @ work:2.1 ");
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 22), " Unlock · git commit… ");
         // Too little of the origin would show: no dangling separator.
-        assert_eq!(title(" Unlock", "git commit @ work:2.1", 18), " Unlock ");
-        assert_eq!(title(" Unlock key", "", 8), " Unloc… ");
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 18), " Unlock ");
+        assert_eq!(title(" Unlock key", "", false, 8), " Unloc… ");
+        // A guess stays marked however much of it is cut.
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", true, 40), " Unlock · git commit @ work:2.1 ? ");
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", true, 24), " Unlock · git commit… ? ");
+        assert_eq!(title(" Unlock", "", true, 40), " Unlock ");
         for w in 1..40 {
-            let t = title(" Unlock · Alice <a@x>", "git commit @ work:2.1", w);
-            assert!(width(&t) <= w.max(2), "w={w} {t:?}");
-            assert!(!t.trim_end().ends_with('·'), "w={w} {t:?}");
+            for guess in [false, true] {
+                let t = title(" Unlock · Alice <a@x>", "git commit @ work:2.1", guess, w);
+                assert!(width(&t) <= w.max(2), "w={w} {t:?}");
+                assert!(!t.trim_end().ends_with('·'), "w={w} {t:?}");
+            }
         }
     }
 

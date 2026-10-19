@@ -53,26 +53,95 @@ pub fn owner_pid(value: &str) -> Option<u32> {
 /// the agent (yubikey-touch-detector), which the agent then sees as the
 /// requester of everything that passes through it, not whoever really asked.
 pub fn is_agent_proxy(pid: u32) -> bool {
-    let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) else { return false };
-    let inodes: Vec<String> = fds
-        .flatten()
-        .filter_map(|e| fs::read_link(e.path()).ok()?.to_str()?.strip_prefix("socket:[")?.strip_suffix(']').map(String::from))
-        .collect();
     let Ok(table) = fs::read_to_string("/proc/net/unix") else { return false };
+    listens_on_agent(&agent_sockets(&table), &sockets(pid))
+}
+
+/// The inodes of the sockets `pid` has open.
+fn sockets(pid: u32) -> Vec<u64> {
+    let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) else { return Vec::new() };
+    fds.flatten()
+        .filter_map(|e| fs::read_link(e.path()).ok()?.to_str()?.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok())
+        .collect()
+}
+
+/// The sockets on a gpg-agent socket's path in `table`, from /proc/net/unix:
+/// each one's inode, and whether it's listening. The others there are
+/// connections accepted on it.
+fn agent_sockets(table: &str) -> Vec<(u64, bool)> {
     // Num RefCount Protocol Flags Type St Inode Path; 0x10000 is listening.
     // The path may hold spaces, so its name is taken from the end of the
     // line. Any of the agent's sockets will do: .ssh, .extra and .browser
     // are proxied just the same.
-    table.lines().skip(1).any(|l| {
-        let f: Vec<&str> = l.split_whitespace().take(7).collect();
-        f.len() == 7
-            && u32::from_str_radix(f[3].trim_start_matches("0x"), 16).is_ok_and(|fl| fl & 0x10000 != 0)
-            && inodes.iter().any(|i| i == f[6])
-            && l.rsplit('/').next().is_some_and(|n| n.starts_with("S.gpg-agent"))
-    })
+    table
+        .lines()
+        .skip(1)
+        .filter(|l| l.rsplit('/').next().is_some_and(|n| n.starts_with("S.gpg-agent")))
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().take(7).collect();
+            let flags = u32::from_str_radix(f.get(3)?.trim_start_matches("0x"), 16).ok()?;
+            Some((f.get(6)?.parse().ok()?, flags & 0x10000 != 0))
+        })
+        .collect()
 }
 
-pub fn find(pid: u32) -> Origin {
+fn listens_on_agent(agent: &[(u64, bool)], inodes: &[u64]) -> bool {
+    agent.iter().any(|(i, listening)| *listening && inodes.contains(i))
+}
+
+/// Who asked through the proxy `proxy`: the one process at the other end
+/// of the connections it accepted on a gpg-agent socket, followed through
+/// any proxy in front of it. With several (clients at once), the one on the
+/// terminal `tty`, if only one is.
+pub fn proxy_client(proxy: u32, tty: Option<&str>) -> Option<u32> {
+    let clients = proxy_clients(proxy);
+    if let [c] = clients[..] {
+        return Some(c);
+    }
+    let dev = fs::metadata(tty?).ok()?.rdev();
+    let on: Vec<u32> = clients
+        .into_iter()
+        .filter(|&c| ancestors(c).into_iter().any(|p| stat(p, 4).is_some_and(|t| t as u64 == dev)))
+        .collect();
+    if let [c] = on[..] { Some(c) } else { None }
+}
+
+fn proxy_clients(proxy: u32) -> Vec<u32> {
+    let Ok(table) = fs::read_to_string("/proc/net/unix") else { return Vec::new() };
+    let Ok(peers) = sys::unix_peers() else { return Vec::new() };
+    let agent = agent_sockets(&table);
+    let Ok(procs) = fs::read_dir("/proc") else { return Vec::new() };
+    let held: Vec<(u32, Vec<u64>)> = procs
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse().ok())
+        .filter(|&p| ours(p))
+        .map(|p| (p, sockets(p)))
+        .collect();
+    let socks = |p: u32| held.iter().find(|(q, _)| *q == p).map_or(&[][..], |(_, s)| &s[..]);
+    // A proxy may connect to itself (yubikey-touch-detector does): never
+    // its own client.
+    let mut seen = vec![proxy];
+    let mut todo = vec![proxy];
+    let mut clients = Vec::new();
+    while let Some(p) = todo.pop() {
+        let accepted: Vec<u64> = agent.iter().filter(|(i, l)| !l && socks(p).contains(i)).map(|(i, _)| *i).collect();
+        let ends: Vec<u64> = peers.iter().filter(|(i, _)| accepted.contains(i)).map(|(_, peer)| *peer).collect();
+        for &(q, ref s) in &held {
+            if seen.contains(&q) || !s.iter().any(|i| ends.contains(i)) {
+                continue;
+            }
+            seen.push(q);
+            if listens_on_agent(&agent, s) {
+                todo.push(q);
+            } else {
+                clients.push(q);
+            }
+        }
+    }
+    clients
+}
+
+pub fn find(pid: u32, full: bool) -> Origin {
     // The kernel gives the agent the requester's pid as seen from its own pid
     // namespace, which is ours too, so it's the right process unless it has
     // exited and the pid was reused: never describe anyone else's.
@@ -93,7 +162,7 @@ pub fn find(pid: u32) -> Origin {
         .last()
         .or(chain.first());
     Origin {
-        cmd: top.and_then(|&p| cmdline(p)),
+        cmd: top.and_then(|&p| cmdline(p, full)),
         pane: pane.map(|p| cut(&p, MAX_PANE)),
     }
 }
@@ -108,26 +177,11 @@ pub fn is_tty(path: &str) -> bool {
         .is_ok_and(|f| unsafe { libc::isatty(f.as_raw_fd()) == 1 })
 }
 
-/// Who has the terminal `tty` when the requester isn't known (it asked through
-/// a proxy): the leader of its foreground job, and the pane it's in. A shell
-/// there is only the prompt, not who asked.
+/// Where the requester likely is when it isn't known (it asked through a
+/// proxy): the pane on the terminal `tty`. Only that: what runs there may
+/// well not be who asked, and its command line may hold secrets.
 pub fn find_tty(tty: &str) -> Origin {
-    let pane = tmux::pane_on(tty).map(|p| cut(&p, MAX_PANE));
-    let cmd = fs::metadata(tty)
-        .ok()
-        .map(|m| m.rdev())
-        .and_then(|dev| {
-            let procs = fs::read_dir("/proc").ok()?;
-            procs
-                .flatten()
-                .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-                .filter(|&p| stat(p, 4).is_some_and(|t| t as u64 == dev))
-                .find_map(|p| stat(p, 5).filter(|&g| g > 1))
-        })
-        .map(|g| g as u32)
-        .filter(|&p| ours(p) && comm(p).is_some_and(|c| !stops(&c) || wrapper(p)))
-        .and_then(cmdline);
-    Origin { cmd, pane }
+    Origin { cmd: None, pane: tmux::pane_on(tty).map(|p| cut(&p, MAX_PANE)) }
 }
 
 fn stops(comm: &str) -> bool {
@@ -231,11 +285,24 @@ pub fn args(pid: u32) -> Vec<String> {
     raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect()
 }
 
-fn cmdline(pid: u32) -> Option<String> {
-    let mut args = args(pid).into_iter();
-    let argv0 = args.next()?;
-    let name = argv0.rsplit('/').next().unwrap_or(&argv0).to_string();
-    let line = std::iter::once(name).chain(args).collect::<Vec<_>>().join(" ");
+fn cmdline(pid: u32, full: bool) -> Option<String> {
+    command(&args(pid), full)
+}
+
+/// The command `args` as shown: with `full`, all of it; otherwise only the
+/// program, and the next word if it's a subcommand (`git commit`). The rest
+/// may hold secrets (`mysql -p…`, a URL with a password), and the program
+/// is enough to say what asked.
+fn command(args: &[String], full: bool) -> Option<String> {
+    let (argv0, rest) = args.split_first()?;
+    let name = argv0.rsplit('/').next().unwrap_or(argv0);
+    let sub = |a: &&String| {
+        a.len() <= 20
+            && a.starts_with(|c: char| c.is_ascii_lowercase())
+            && a.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    };
+    let rest: Vec<&String> = if full { rest.iter().collect() } else { rest.first().filter(sub).into_iter().collect() };
+    let line = std::iter::once(name).chain(rest.into_iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
     Some(cut(&clean(&line), MAX_CMD))
 }
 
@@ -271,11 +338,11 @@ mod tests {
     fn finds_this_process() {
         let me = std::process::id();
         assert!(ancestors(me).starts_with(&[me, std::os::unix::process::parent_id()]));
-        assert!(cmdline(me).is_some_and(|c| !c.contains('/')));
+        assert!(cmdline(me, true).is_some_and(|c| !c.contains('/')));
         assert!(ours(me));
         // init is root's: never described to anyone else.
         if sys::uid() != 0 {
-            assert!(find(1).label().is_none());
+            assert!(find(1, true).label().is_none());
         }
     }
 
@@ -283,6 +350,49 @@ mod tests {
     fn ordinary_processes_are_not_agent_proxies() {
         assert!(!is_agent_proxy(std::process::id()));
         assert!(!is_agent_proxy(u32::MAX));
+    }
+
+    #[test]
+    fn agent_sockets_are_found_by_name_while_listening() {
+        let table = "\
+Num       RefCount Protocol Flags    Type St Inode Path
+0000000000000000: 00000002 00000000 00010000 0001 01 101 /run/user/1000/gnupg/S.gpg-agent
+0000000000000000: 00000003 00000000 00000000 0001 03 102 /run/user/1000/gnupg/S.gpg-agent
+0000000000000000: 00000002 00000000 00010000 0001 01 103 /home/a b/.gnupg/S.gpg-agent.ssh
+0000000000000000: 00000002 00000000 00010000 0001 01 104 /tmp/S.gpg-agent/other
+0000000000000000: 00000002 00000000 00010000 0001 01 105 @S.gpg-agent
+0000000000000000: 00000002 00000000 00010000 0001 01 106
+";
+        // Only the socket's own name counts, the path may hold a space, and
+        // abstract or unnamed sockets aren't the agent's. 102 was accepted
+        // on it: a connection, not a listener.
+        let agent = agent_sockets(table);
+        assert_eq!(agent, [(101, true), (102, false), (103, true)]);
+        let has = |i: u64| listens_on_agent(&agent, &[i]);
+        assert!(has(101) && has(103));
+        assert!(!has(102) && !has(104) && !has(10));
+        assert!(!listens_on_agent(&agent, &[]));
+    }
+
+    #[test]
+    fn proxy_without_clients_names_no_one() {
+        assert_eq!(proxy_client(std::process::id(), None), None);
+        assert_eq!(proxy_client(u32::MAX, Some("/dev/null")), None);
+    }
+
+    #[test]
+    fn command_is_the_program_and_subcommand() {
+        let c = |args: &[&str], full| command(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), full);
+        assert_eq!(c(&["/usr/bin/git", "commit", "-S", "-m", "fix"], false).as_deref(), Some("git commit"));
+        assert_eq!(c(&["/usr/bin/git", "commit", "-S", "-m", "fix"], true).as_deref(), Some("git commit -S -m fix"));
+        // What could be a secret, or lead to one, is left out.
+        assert_eq!(c(&["mysql", "-phunter2"], false).as_deref(), Some("mysql"));
+        assert_eq!(c(&["psql", "postgres://u:pw@h/db"], false).as_deref(), Some("psql"));
+        assert_eq!(c(&["vault", "login", "s.AbC123"], false).as_deref(), Some("vault login"));
+        assert_eq!(c(&["tool", "Hunter2"], false).as_deref(), Some("tool"));
+        assert_eq!(c(&["sleep", "999"], false).as_deref(), Some("sleep"));
+        assert_eq!(c(&["x", "a-very-long-word-that-is-no-subcommand"], false).as_deref(), Some("x"));
+        assert_eq!(c(&[], false), None);
     }
 
     #[test]

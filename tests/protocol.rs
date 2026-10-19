@@ -68,7 +68,7 @@ fn nowhere_to_ask() {
     let sb = Sandbox::new();
     let mut p = Pinentry::spawn(&sb, &[]);
     for cmd in ["GETPIN", "CONFIRM", "CONFIRM --one-button", "MESSAGE"] {
-        assert_eq!(p.cmd(cmd), ["ERR 83886165 No pinentry (not in tmux, and no tty or it is in use) <Pinentry>"], "{cmd}");
+        assert_eq!(p.cmd(cmd), ["ERR 83886165 No pinentry (no tmux client for a popup, and no terminal to ask on) <Pinentry>"], "{cmd}");
     }
 }
 

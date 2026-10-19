@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::os::unix::process::CommandExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -340,7 +341,8 @@ fn title_names_command_and_pane() {
     s.p.start("GETPIN");
     let screen = s.pty().wait_text("PIN:");
     let top = &rows(&screen)[popup_box(&screen).0];
-    assert!(top.contains(&format!(" Unlock · timeout 1000 sleep 999 @ {pane} ")), "{top}");
+    // Only the program: the rest of a command line may hold secrets.
+    assert!(top.contains(&format!(" Unlock · timeout @ {pane} ")), "{top}");
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
 }
@@ -365,7 +367,9 @@ fn title_skips_sh_c_wrappers() {
     require_tmux!();
     let sb = Sandbox::new();
     let mut s = Setup::new(&sb);
-    // Like git running gpg.program through `sh -c`: name git, not gpg.
+    // Like git running gpg.program through `sh -c`: name git, not gpg. In
+    // full, to see that it's that command line.
+    sb.config("origin = \"full\"");
     let (pane, pid) = in_window(&s.tmux, "timeout 999 sh -c 'sleep 998; :'", "sleep");
     s.p.setup(&["SETTITLE Unlock", &format!("OPTION owner={pid}/{} {}", uid(), hostname())]);
     s.p.start("GETPIN");
@@ -374,6 +378,71 @@ fn title_skips_sh_c_wrappers() {
     assert!(top.contains(&format!(" Unlock · timeout 999 sh -c sleep 998; : @ {pane} ")), "{top}");
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
+fn title_names_the_client_behind_a_proxy() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let proxy = Proxy::start(&sb);
+    // Typed at a shell, like gpg would be; only sleep keeps the connection.
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-s").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).process_group(0);
+    let mut client = proxy.spawn(&mut cmd);
+    let shell = client.0.id();
+    let mut script = client.0.stdin.take().unwrap();
+    std::io::Write::write_all(&mut script, b"sleep 998 <&3 3<&- & exec 3<&-; wait\n").unwrap();
+    wait_until("shell to let go of the connection", || (!std::path::Path::new(&format!("/proc/{shell}/fd/3")).exists()).then_some(()), String::new);
+    let (top, log) = ask_through_proxy(&mut s, &proxy, "not a tty");
+    // Known, not guessed: no mark.
+    assert!(top.contains(" Unlock · sleep ─"), "{top}");
+    let tty = s.pty().path();
+    assert_eq!(log, [format!("open popup {tty} Unlock||sleep"), format!("close popup {tty} Unlock||sleep")]);
+    drop(script);
+}
+
+/// Asks through `proxy` in front of the agent, with GPG_TTY `tty`, and logs
+/// what the hook is told. Returns the popup's top border and the log.
+fn ask_through_proxy(s: &mut Setup, proxy: &Proxy, tty: &str) -> (String, Vec<String>) {
+    let log = log_hook(s.sb);
+    s.p.setup(&["SETTITLE Unlock", &format!("OPTION ttyname={tty}"), &format!("OPTION owner={}/{} {}", proxy.pid, uid(), hostname())]);
+    s.p.start("GETPIN");
+    let screen = s.pty().wait_text("PIN:");
+    let top = rows(&screen)[popup_box(&screen).0].clone();
+    s.pty().send("\x1b");
+    assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
+    (top, hook_lines(&log, 2))
+}
+
+#[test]
+fn behind_a_proxy_the_terminal_names_a_guess() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let (pane, _) = in_window(&s.tmux, "sleep 999", "sleep");
+    let tty = s.tmux.run(&["display", "-p", "-t", &pane, "#{pane_tty}"]).trim().to_string();
+    // No client: only the pane, never what runs there, which may not be
+    // who asked.
+    let (top, log) = ask_through_proxy(&mut s, &Proxy::start(&sb), &tty);
+    let origin = pane;
+    assert!(top.contains(&format!(" Unlock · {origin} ? ")), "{top}");
+    let client = s.pty().path();
+    assert_eq!(log, [format!("open popup {client} Unlock|1|{origin}"), format!("close popup {client} Unlock|1|{origin}")]);
+}
+
+#[test]
+fn behind_a_proxy_without_a_terminal_the_watched_pane_is_a_guess() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let mut s = Setup::new(&sb);
+    let (pane, _) = in_window(&s.tmux, "sleep 999", "sleep");
+    s.tmux.run(&["select-window", "-t", &pane]);
+    let (top, log) = ask_through_proxy(&mut s, &Proxy::start(&sb), "not a tty");
+    let origin = pane;
+    assert!(top.contains(&format!(" Unlock · {origin} ? ")), "{top}");
+    let client = s.pty().path();
+    assert_eq!(log, [format!("open popup {client} Unlock|1|{origin}"), format!("close popup {client} Unlock|1|{origin}")]);
 }
 
 #[test]
@@ -477,7 +546,7 @@ fn terminal_in_raw_mode_outside_tmux_gets_a_popup() {
 /// Points the hook at a log of its events. Returns the log's path.
 fn log_hook(sb: &Sandbox) -> std::path::PathBuf {
     let log = sb.tmp().join("hook.log");
-    hook(sb, &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE|$PIT_ORIGIN\" >> {}", log.display()));
+    hook(sb, &format!("echo \"$PIT_EVENT $PIT_WHERE $PIT_TITLE|$PIT_ORIGIN_GUESS|$PIT_ORIGIN\" >> {}", log.display()));
     log
 }
 
@@ -508,7 +577,7 @@ fn hook_runs_on_popup_open_and_close() {
     s.pty().send("\x1b");
     assert_eq!(err_code(&s.p.finish()), Some(ERR_CANCELED));
     let tty = s.pty().path();
-    assert_eq!(hook_lines(&log, 2), [format!("open popup {tty} Unlock|"), format!("close popup {tty} Unlock|")]);
+    assert_eq!(hook_lines(&log, 2), [format!("open popup {tty} Unlock||"), format!("close popup {tty} Unlock||")]);
 }
 
 #[test]
@@ -520,7 +589,7 @@ fn hook_runs_on_inline_open_and_close() {
     let (pane, tty) = asked_from_window(&mut s, "sleep 999", "sleep");
     answer_in_pane(&s, &pane, "x");
     assert_eq!(s.p.finish(), ["D x", "OK"]);
-    assert_eq!(hook_lines(&log, 2), [format!("open inline {tty} gpg|sleep 999 @ {pane}"), format!("close inline {tty} gpg|sleep 999 @ {pane}")]);
+    assert_eq!(hook_lines(&log, 2), [format!("open inline {tty} gpg||sleep @ {pane}"), format!("close inline {tty} gpg||sleep @ {pane}")]);
 }
 
 #[test]
@@ -595,6 +664,17 @@ fn try_a_hook() {
     pause();
     s.pty().send("\r");
     assert_eq!(s.p.finish(), ["OK"]);
+    pause();
+
+    // Behind a proxy in front of the agent: who asked is a guess.
+    let proxy = Proxy::start(&sb);
+    s.p.setup(&["SETDESC Behind a proxy", &format!("OPTION owner={}/{} {}", proxy.pid, uid(), hostname())]);
+    s.p.start("GETPIN");
+    s.pty().wait_text("PIN:");
+    pause();
+    s.pty().send("hunter2\r");
+    assert_eq!(s.p.finish(), ["D hunter2", "OK"]);
+    drop(proxy);
     pause();
 
     let (pane, _) = asked_from_window(&mut s, "sleep 999", "sleep");

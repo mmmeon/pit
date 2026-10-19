@@ -3,7 +3,7 @@
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -65,6 +65,104 @@ pub fn winsize(fd: RawFd) -> Option<(usize, usize)> {
 pub fn line_mode(fd: RawFd) -> bool {
     let mut t: libc::termios = unsafe { std::mem::zeroed() };
     unsafe { libc::tcgetattr(fd, &mut t) == 0 && t.c_lflag & libc::ICANON != 0 }
+}
+
+/// Each connected Unix socket's inode, with its peer's: what `ss -x` shows,
+/// from the kernel's socket diagnostics, which needs no privileges.
+pub fn unix_peers() -> io::Result<Vec<(u64, u64)>> {
+    // From linux/sock_diag.h and linux/unix_diag.h.
+    const SOCK_DIAG_BY_FAMILY: u16 = 20;
+    const UDIAG_SHOW_PEER: u32 = 4;
+    const UNIX_DIAG_PEER: u16 = 2;
+    #[repr(C)]
+    struct Request {
+        nlh: libc::nlmsghdr,
+        family: u8,
+        protocol: u8,
+        pad: u16,
+        states: u32,
+        ino: u32,
+        show: u32,
+        cookie: [u32; 2],
+    }
+    let fd = check(unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, libc::NETLINK_SOCK_DIAG) })?;
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let req = Request {
+        nlh: libc::nlmsghdr {
+            nlmsg_len: size_of::<Request>() as u32,
+            nlmsg_type: SOCK_DIAG_BY_FAMILY,
+            nlmsg_flags: (libc::NLM_F_REQUEST | libc::NLM_F_DUMP) as u16,
+            nlmsg_seq: 1,
+            nlmsg_pid: 0,
+        },
+        family: libc::AF_UNIX as u8,
+        protocol: 0,
+        pad: 0,
+        states: !0,
+        ino: 0,
+        show: UDIAG_SHOW_PEER,
+        cookie: [!0; 2],
+    };
+    let mut kernel: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+    kernel.nl_family = libc::AF_NETLINK as _;
+    let sent = unsafe {
+        libc::sendto(
+            fd.as_raw_fd(),
+            (&raw const req).cast(),
+            size_of::<Request>(),
+            0,
+            (&raw const kernel).cast(),
+            size_of::<libc::sockaddr_nl>() as _,
+        )
+    };
+    if sent < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let u16_at = |b: &[u8], i: usize| u16::from_ne_bytes([b[i], b[i + 1]]);
+    let u32_at = |b: &[u8], i: usize| u32::from_ne_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    let align = |n: usize| (n + 3) & !3;
+    let mut peers = Vec::new();
+    let mut buf = vec![0u8; 32 << 10];
+    loop {
+        let n = unsafe { libc::recv(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        let mut msgs = &buf[..n as usize];
+        // Each message: nlmsghdr (16 bytes), then unix_diag_msg (16 bytes:
+        // family, type, state, pad, inode, cookie), then attributes.
+        while msgs.len() >= 16 {
+            let len = u32_at(msgs, 0) as usize;
+            if len < 16 || len > msgs.len() {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "short netlink message"));
+            }
+            match i32::from(u16_at(msgs, 4)) {
+                libc::NLMSG_DONE => return Ok(peers),
+                libc::NLMSG_ERROR => return Err(io::Error::other("socket diagnostics failed")),
+                _ => {}
+            }
+            let body = &msgs[16..len];
+            if body.len() >= 16 {
+                let ino = u32_at(body, 4);
+                let mut attrs = &body[16..];
+                while attrs.len() >= 4 {
+                    let alen = u16_at(attrs, 0) as usize;
+                    if alen < 4 || alen > attrs.len() {
+                        break;
+                    }
+                    if u16_at(attrs, 2) == UNIX_DIAG_PEER && alen >= 8 {
+                        peers.push((ino.into(), u32_at(attrs, 4).into()));
+                    }
+                    attrs = &attrs[align(alen).min(attrs.len())..];
+                }
+            }
+            msgs = &msgs[align(len).min(msgs.len())..];
+        }
+    }
 }
 
 pub fn uid() -> u32 {

@@ -3,8 +3,13 @@
 mod common;
 
 use std::fs;
+use std::io;
+use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
 
 use common::*;
 
@@ -96,4 +101,95 @@ fn ssh_request_names_command_and_pane() {
     client.pty.send("\x1b");
     client.pty.wait_gone("ssh-add");
     assert_eq!(sb.leftovers(), Vec::<String>::new());
+}
+
+/// Forwards each connection on a socket named `name` to the agent socket
+/// `to`, as yubikey-touch-detector does: the agent sees this process as the
+/// one asking. Returns the socket's path.
+fn forward(sb: &Sandbox, name: &str, to: &str) -> PathBuf {
+    let dir = sb.root.join("proxy");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    let listener = UnixListener::bind(&path).unwrap();
+    let to = to.to_string();
+    thread::spawn(move || {
+        for client in listener.incoming().flatten() {
+            let Ok(agent) = UnixStream::connect(&to) else { continue };
+            for (mut from, mut into) in [(client.try_clone().unwrap(), agent.try_clone().unwrap()), (agent, client)] {
+                thread::spawn(move || {
+                    let _ = io::copy(&mut from, &mut into);
+                    let _ = into.shutdown(Shutdown::Both);
+                });
+            }
+        }
+    });
+    path
+}
+
+#[test]
+#[ignore = "starts a real gpg-agent"]
+fn ssh_from_a_terminal_outside_tmux_is_asked_there() {
+    ssh_from_a_terminal_outside_tmux(false);
+}
+
+#[test]
+#[ignore = "starts a real gpg-agent"]
+fn ssh_through_a_proxy_from_a_terminal_outside_tmux_is_asked_there() {
+    ssh_from_a_terminal_outside_tmux(true);
+}
+
+fn ssh_from_a_terminal_outside_tmux(proxied: bool) {
+    require_tmux!();
+    if !have("gpg-connect-agent") || !have("ssh-add") || !have("ssh-keygen") {
+        eprintln!("skipping: gpg-connect-agent or ssh tools not found");
+        return;
+    }
+    let sb = Sandbox::new();
+    let home = sb.root.join("gnupg");
+    fs::create_dir(&home).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    let conf = format!("pinentry-program {BIN}\nenable-ssh-support\ndefault-cache-ttl-ssh 0\nmax-cache-ttl-ssh 0\n");
+    fs::write(home.join("gpg-agent.conf"), conf).unwrap();
+    let key = sb.root.join("id");
+    let status = Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-f"]).arg(&key).status().unwrap();
+    assert!(status.success());
+    let data = sb.root.join("data");
+    fs::write(&data, "x").unwrap();
+
+    let tmux = Tmux::start(&sb);
+    let _client = tmux.attach(30, 100);
+    let agent = Agent { sb: &sb };
+    let out = agent.command("gpgconf").args(["--list-dirs", "agent-ssh-socket"]).output().unwrap();
+    let mut sock = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    if proxied {
+        sock = forward(&sb, "S.gpg-agent.ssh", &sock).display().to_string();
+    }
+
+    let pty = Pty::new(20, 100);
+    // As ssh's Match exec in the readme does, then ssh asking the agent.
+    let script = format!(
+        "GPG_TTY=$(tty) gpg-connect-agent UPDATESTARTUPTTY /bye >/dev/null; \
+         export SSH_AUTH_SOCK={sock}; ssh-add {key} && ssh-keygen -Y sign -n file -f {key}.pub {data} && echo signed; sleep 9",
+        key = key.display(),
+        data = data.display(),
+    );
+    let mut sh = pty.command("sh");
+    agent_env(&agent, &mut sh);
+    let _sh = Killed(sh.args(["-c", &script]).spawn().unwrap());
+
+    // Adding it asks for a passphrase to protect it with, twice.
+    pty.wait_text("Passphrase:");
+    pty.send("pw\r");
+    pty.wait_text("Repeat:");
+    pty.send("pw\r");
+    // Using it asks for that passphrase.
+    pty.wait_text("Passphrase:");
+    pty.send("wrong\r");
+    pty.wait_text("Bad Passphrase");
+    pty.send("pw\r");
+    pty.wait_text("signed");
+}
+
+fn agent_env(agent: &Agent, cmd: &mut Command) {
+    agent.sb.apply(cmd).env("GNUPGHOME", agent.sb.root.join("gnupg"));
 }

@@ -4,7 +4,13 @@ tmux
   - popup on the most recently active client, over the current window
   - other attached clients get a status-line note saying where it is
   - popup title names the command that asked and its pane, e.g.
-    "git commit -S @ work:2.1" (from the pid gpg-agent passes as owner)
+    "git commit @ work:2.1" (from the pid gpg-agent passes as owner): only
+    the program and subcommand, unless origin = "full"
+  - behind a proxy in front of gpg-agent (yubikey-touch-detector), which
+    gpg-agent takes for the owner, the command is the proxy's client. If
+    that isn't clear (several at once, none on gpg's terminal), the title
+    names only a pane, marked with a "?": the one on gpg's terminal, or the
+    one you're looking at, e.g. "work:2.1 ?"
   - sized to fit the prompt
   - styles: see config, [tmux] style
   - in place in a pane, instead of a popup: see config, [tmux] inline
@@ -26,6 +32,7 @@ config
 
     echo = "marker"     # marker|dots|none (default marker; marker
                         # changes per key without revealing length)
+    origin = "short"    # short|full (default short), see below
     hook = '<command>'  # see below
 
     [tmux]
@@ -43,13 +50,24 @@ config
   program in the foreground job reads the terminal (e.g. `cat | gpg -d`, or
   `cat` there while gpg asks from elsewhere), when gpg-agent says who asked.
   Not caught: one that opens /dev/tty itself without raw mode, which is rare.
+  Behind a proxy whose client isn't clear, whatever is in the foreground
+  can't be told apart from who asked, so a terminal isn't asked unless
+  nothing there reads it. When there's nowhere to ask, gpg's error says why.
+
+  origin: how the command that asked is named, in the title and the hook.
+  short gives the program and, if the next word looks like a subcommand,
+  that too ("git commit", "mysql"); full gives the whole command line,
+  which may hold secrets (mysql -p..., a URL with a password) and puts them
+  on screen. A guessed origin is only ever a pane.
 
   hook: run with sh when a prompt opens and closes (once the open run is
   done), in the background, with PIT_EVENT (open|close), PIT_TITLE,
-  PIT_ORIGIN (the command and pane that asked) and PIT_WHERE ("popup
-  <client tty>" or "inline <tty>"); never the passphrase. A command line can
-  hold secrets, though, so think twice before sending PIT_ORIGIN anywhere
-  that keeps or shows it (a notification history, a lock screen). e.g.
+  PIT_ORIGIN (the command and pane that asked, as in the title),
+  PIT_ORIGIN_GUESS (1 when PIT_ORIGIN is a guess, behind a proxy; empty
+  otherwise) and PIT_WHERE ("popup <client tty>" or "inline <tty>"); never
+  the passphrase. With origin = "full" a command line can hold secrets, so
+  think twice before sending PIT_ORIGIN anywhere that keeps or shows it (a
+  notification history, a lock screen). e.g.
     hook = '''
     [ "$PIT_EVENT" = open ] &&
       notify-send "gpg wants a passphrase" "$PIT_TITLE"

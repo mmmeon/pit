@@ -540,6 +540,94 @@ pub struct Client {
     child: Child,
 }
 
+/// A process listening on a gpg-agent socket, as a proxy in front of the
+/// agent does (yubikey-touch-detector): it accepts connections and holds
+/// them. Killed on drop.
+pub struct Proxy {
+    pub pid: u32,
+    path: PathBuf,
+}
+
+impl Proxy {
+    pub fn start(sb: &Sandbox) -> Proxy {
+        // A space in the path, as in some home directories.
+        let dir = sb.root.join("gnupg home");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("S.gpg-agent.extra");
+        let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        addr.sun_family = libc::AF_UNIX as _;
+        let bytes = path.as_os_str().as_encoded_bytes();
+        assert!(bytes.len() < addr.sun_path.len(), "{path:?}");
+        for (d, s) in addr.sun_path.iter_mut().zip(bytes) {
+            *d = *s as _;
+        }
+        // Listening from a child only: this process isn't a proxy, even for
+        // a moment, to tests running beside it. The child makes only system
+        // calls, which is all that's safe after forking a threaded process.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            unsafe {
+                // Nothing of the tests' held open (pipes to a pinentry would
+                // never see EOF), and gone with the test.
+                libc::syscall(libc::SYS_close_range, 0, u32::MAX, 0);
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+                let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+                if fd < 0 || libc::bind(fd, (&raw const addr).cast(), len) < 0 || libc::listen(fd, 16) < 0 {
+                    libc::_exit(1);
+                }
+                // Each connection is held, and told it was accepted.
+                loop {
+                    let c = libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut());
+                    if c >= 0 {
+                        libc::write(c, b"!".as_ptr().cast(), 1);
+                    }
+                }
+            }
+        }
+        Proxy { pid: pid as u32, path }
+    }
+
+    /// Spawns `cmd` as a client of the proxy: connected, once accepted, on
+    /// its fd 3, and held by it alone.
+    pub fn spawn(&self, cmd: &mut Command) -> Killed {
+        let conn = wait_until("proxy to listen", || std::os::unix::net::UnixStream::connect(&self.path).ok(), String::new);
+        (&conn).read_exact(&mut [0]).unwrap();
+        let fd = conn.as_raw_fd();
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::dup2(fd, 3) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Killed(cmd.spawn().unwrap())
+    }
+}
+
+/// A child killed on drop, with its process group if it leads one, so
+/// nothing is left holding the tests' output.
+pub struct Killed(pub Child);
+
+impl Drop for Killed {
+    fn drop(&mut self) {
+        unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        unsafe {
+            libc::kill(self.pid as i32, libc::SIGKILL);
+            libc::waitpid(self.pid as i32, std::ptr::null_mut(), 0);
+        }
+    }
+}
+
 impl Drop for Client {
     fn drop(&mut self) {
         let _ = self.child.kill();
