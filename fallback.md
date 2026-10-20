@@ -83,13 +83,56 @@ for passphrases.
   display, putenv) and the owner pid's environ. Don't rely on pit's own environment.
 - Ordering and config: likely an ordered list, e.g.
   `fallback = ["tmux", "terminal", "pinentry-qt", "pending"]`, rather than one flag
-  per mechanism.
+  per mechanism. (Superseded for now by the two GUI positions under Decision.)
 
 ## Recommendation
 Most coverage for the least work: **#1 (delegate to a GUI pinentry)**, then **#5
 (claimable pending prompt)**, because between them they cover every case that errors
 today. **#2 with a kitty/wezterm overlay** is the polished option that matches the
 tmux popup experience. #4's "popup busy → new window" is a small, local win.
+
+## Decision: #1 and #5, with the GUI first or last
+Going with #1 and #5. The GUI pinentry takes one of two positions instead of a slot
+in a general ordered list. Real setups want either "GUI only when nothing else
+works" or "GUI whenever I'm at a desktop", and nothing in between.
+
+```toml
+[gui]
+pinentry = "pinentry-qt"   # unset: no GUI fallback
+when = "last"              # last|first
+```
+
+- `last`: inline on gpg's terminal → tmux popup → inline in a pane → GUI → pending.
+- `first`: GUI, if a display is reachable → then the same order as `last`, without
+  the GUI.
+- The pending prompt (#5) is always last, since it needs the user to go and run
+  `pit answer`.
+
+### When a display is reachable
+- X11: `DISPLAY` is set and its socket exists (`/tmp/.X11-unix/X<n>`). A TCP or
+  ssh-forwarded display (`localhost:10`) has no local socket to check, so count it
+  as reachable.
+- Wayland: `WAYLAND_DISPLAY` is set and `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` exists.
+- macOS: pinentry-mac doesn't use `DISPLAY`. Treat it as reachable unless it's an
+  ssh session with no `DISPLAY` (`SSH_CONNECTION` set).
+- Where the values come from: gpg-agent passes `--display` (ignored today) and
+  `OPTION display=`. Unknown yet whether `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` arrive
+  as `OPTION putenv=` or only in pit's environment; log one real session to find
+  out. Failing both, use the owner pid's `/proc/<pid>/environ`.
+
+### The hand-off
+- Starting the pinentry vs. the user cancelling: if it fails to start or exits
+  before its greeting, `first` moves on to the terminal options and `last` moves on
+  to the pending prompt. If the user cancels in it, that's the answer; don't ask
+  again elsewhere.
+- Replay the OPTIONs pit has kept, then SETDESC/SETPROMPT/SETERROR/etc. The origin
+  label goes into SETTITLE, so the dialog still says which command asked.
+- The hook fires with place `gui <program>`.
+- Refuse a `pinentry` that resolves to pit itself (e.g. via a `pinentry` symlink),
+  or it loops.
+- In the code: a step in `ask()` in src/assuan.rs. For `first` it goes before the
+  tty and tmux checks; for `last` it replaces the two "nowhere to ask" errors (no
+  terminal, busy pane).
 
 ## Verification
 None for now. This is ideas only. Any idea we pick gets its own plan with tests (the
