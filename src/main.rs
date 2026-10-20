@@ -27,11 +27,36 @@ use std::env;
 use std::path::Path;
 use std::process::ExitCode;
 
+const HELP: &str = "\
+pit: a pinentry that asks in a tmux popup
+
+usage: set it as pinentry-program in ~/.gnupg/gpg-agent.conf:
+  pinentry-program /path/to/pit
+then run `gpg-connect-agent reloadagent /bye`. gpg-agent starts it and
+speaks the pinentry protocol on stdin/stdout.
+
+  pit answer             answer a prompt left waiting (pending = \"wait\"),
+                         on this terminal
+
+options:
+  -h, --help             print this and exit
+  -T, --ttyname FILE     gpg's terminal, to prompt on outside tmux
+  -N, --ttytype NAME     that terminal's type
+  -D, --display DISPLAY  the X display, for a GUI pinentry ([gui] in settings)
+other pinentry options (--timeout, ...) are accepted and ignored.
+
+settings: ~/.config/pit/config.toml ($XDG_CONFIG_HOME/pit/config.toml)
+";
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.as_slice() {
         [flag, dir] if flag == "--ui" => tmux::ui_main(Path::new(dir)),
         [cmd] if cmd == "answer" => answer::main(),
+        [flag] if flag == "--help" || flag == "-h" => {
+            print!("{HELP}");
+            Ok(())
+        }
         _ => assuan::serve(&args),
     };
     match result {
