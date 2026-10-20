@@ -4,9 +4,13 @@
 //!   echo = "marker"       # marker|dots|none
 //!   origin = "short"      # short|full, the command named in the title
 //!   hook = '<command>'    # run on a prompt opening and closing
+//!   pending = "never"     # never|wait, for `pit answer` when there's nowhere to ask
 //!   [tmux]
 //!   style = "bar"         # bar|box|line, for the popup
 //!   inline = "auto"       # auto|never, asking in a pane in place
+//!   [gui]
+//!   pinentry = "<program>" # another pinentry, for a display
+//!   order = "last"        # last|first, before or after the terminal
 //!
 //! Only TOML's strings are understood, which is all these need. A key that
 //! doesn't parse or isn't known is skipped: a typo shouldn't stand between
@@ -28,11 +32,26 @@ pub struct Config {
     pub style: Style,
     /// Whether a pane may be asked in place, instead of in a popup.
     pub inline: bool,
+    /// A graphical pinentry to hand the prompt to.
+    pub gui: Option<String>,
+    /// Whether to try `gui` before the terminal, not after.
+    pub gui_first: bool,
+    /// Whether a prompt with nowhere to go waits for `pit answer`.
+    pub pending: bool,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { echo: Echo::default(), hook: None, full_origin: false, style: Style::default(), inline: true }
+        Config {
+            echo: Echo::default(),
+            hook: None,
+            full_origin: false,
+            style: Style::default(),
+            inline: true,
+            gui: None,
+            gui_first: false,
+            pending: false,
+        }
     }
 }
 
@@ -61,6 +80,17 @@ impl Config {
                 "tmux.inline" => match v.as_str() {
                     "auto" => c.inline = true,
                     "never" => c.inline = false,
+                    _ => {}
+                },
+                "pending" => match v.as_str() {
+                    "wait" => c.pending = true,
+                    "never" => c.pending = false,
+                    _ => {}
+                },
+                "gui.pinentry" => c.gui = Some(v).filter(|v| !v.trim().is_empty()),
+                "gui.order" => match v.as_str() {
+                    "first" => c.gui_first = true,
+                    "last" => c.gui_first = false,
                     _ => {}
                 },
                 _ => {}
@@ -236,6 +266,15 @@ mod tests {
         let c = Config::parse("");
         assert_eq!((c.echo, c.hook, c.style, c.inline), (Echo::Marker, None, Style::Bar, true));
         assert!(!c.full_origin);
+        assert_eq!((c.gui, c.gui_first, c.pending), (None, false, false));
+    }
+
+    #[test]
+    fn gui_and_pending() {
+        let c = Config::parse("pending = \"wait\"\n[gui]\npinentry = \"pinentry-qt\"\norder = \"first\"\n");
+        assert_eq!((c.gui.as_deref(), c.gui_first, c.pending), (Some("pinentry-qt"), true, true));
+        let c = Config::parse("pending = \"later\"\n[gui]\npinentry = ' '\norder = \"sometimes\"\n");
+        assert_eq!((c.gui, c.gui_first, c.pending), (None, false, false));
     }
 
     #[test]

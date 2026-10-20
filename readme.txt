@@ -34,10 +34,15 @@ config
                         # changes per key without revealing length)
     origin = "short"    # short|full (default short), see below
     hook = '<command>'  # see below
+    pending = "never"   # never|wait (default never), see below
 
     [tmux]
     style = "bar"       # bar|box|line, the popup (default bar)
     inline = "auto"     # auto|never (default auto)
+
+    [gui]
+    pinentry = "pinentry-qt"  # another pinentry, for a display (default none)
+    order = "last"      # last|first (default last)
 
   inline: auto draws the prompt in place under the command that asked,
   instead of in a popup, when that command is in the foreground of its own
@@ -54,6 +59,22 @@ config
   can't be told apart from who asked, so a terminal isn't asked unless
   nothing there reads it. When there's nowhere to ask, gpg's error says why.
 
+  gui: hands the prompt to another pinentry (pinentry-qt, -gtk, -gnome3),
+  only when there's a display for it: a Wayland or local X socket that's
+  there, or a remote X display (e.g. ssh -X). last asks there when there's
+  nowhere on a terminal; first asks there before the terminal and tmux,
+  whenever there's a display. Its title names who asked, as the popup's
+  does. If it can't show the prompt, pit carries on as if it weren't set;
+  cancelling it is an answer, though. It's never given gpg's terminal, so
+  it can't fall back to one pit decided against.
+
+  pending: wait leaves a prompt with nowhere to go (no terminal, no tmux
+  client, no display) waiting for `pit answer`, run in any terminal of
+  yours, which asks there in place. gpg waits too, up to the agent's
+  pinentry timeout, if it has one: so it's best with a hook to say so. If
+  `pit answer` goes away before answering, the prompt waits again. never
+  fails at once, as gpg did before.
+
   origin: how the command that asked is named, in the title and the hook.
   short gives the program and, if the next word looks like a subcommand,
   that too ("git commit", "mysql"); full gives the whole command line,
@@ -64,13 +85,19 @@ config
   done), in the background, with PIT_EVENT (open|close), PIT_TITLE,
   PIT_ORIGIN (the command and pane that asked, as in the title),
   PIT_ORIGIN_GUESS (1 when PIT_ORIGIN is a guess, behind a proxy; empty
-  otherwise) and PIT_WHERE ("popup <client tty>" or "inline <tty>"); never
+  otherwise) and PIT_WHERE ("popup <client tty>", "inline <tty>",
+  "gui <program>" or "pending"); never
   the passphrase. With origin = "full" a command line can hold secrets, so
   think twice before sending PIT_ORIGIN anywhere that keeps or shows it (a
   notification history, a lock screen). e.g.
     hook = '''
     [ "$PIT_EVENT" = open ] &&
       notify-send "gpg wants a passphrase" "$PIT_TITLE"
+    '''
+  or, for a pending prompt:
+    hook = '''
+    [ "$PIT_EVENT/$PIT_WHERE" = open/pending ] &&
+      notify-send "gpg is waiting" "run pit answer"
     '''
 
 screenshots
@@ -159,6 +186,15 @@ screenshots
      created 2024-03-01.
      Passphrase: [••··]
 
+  pit answer, in any terminal, for a pending prompt:
+
+    ~ $ pit answer
+     gpg · git commit -S @ work:2.0
+     Please enter the passphrase to unlock the OpenPGP secret key
+     "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2
+     created 2024-03-01.
+     Passphrase: [••··]
+
 fallback
   - command run in a terminal outside tmux: prompt drawn in place on that
     terminal and erased afterwards, even if a tmux client is attached
@@ -167,10 +203,15 @@ fallback
     a pane only with inline auto and nothing full-screen showing there
   - ssh: add to ~/.ssh/config so the agent knows ssh's terminal:
       Match host * exec "GPG_TTY=$(tty <&2) gpg-connect-agent UPDATESTARTUPTTY /bye >/dev/null"
+  - nowhere on a terminal, with a GUI pinentry and a display: asked there
+    (or there first, with order = "first")
+  - then, with pending = "wait": waits for `pit answer`
 
 error
-  - no tmux client and no known terminal: "No pinentry" error to gpg
+  - no tmux client and no known terminal: "No pinentry" error to gpg,
+    unless there's a GUI or pending prompt to fall back to
   - terminal known but unopenable and no tmux client: same error
+  - pending prompt nobody answered in the agent's timeout: timeout
   - popup closed from tmux mid-prompt: cancelled
 
 testing

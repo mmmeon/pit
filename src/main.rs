@@ -8,11 +8,16 @@
 //! with this at the top of ~/.ssh/config:
 //!   Match host * exec "GPG_TTY=$(tty <&2) gpg-connect-agent UPDATESTARTUPTTY /bye >/dev/null"
 //!
+//! With nowhere on a terminal, it can hand the prompt to a graphical
+//! pinentry, or leave it waiting for `pit answer` in any terminal.
+//!
 //! Settings are in ~/.config/pit/config.toml; see config.rs.
 
+mod answer;
 mod assuan;
 mod config;
 mod gpg;
+mod gui;
 mod origin;
 mod sys;
 mod tmux;
@@ -26,6 +31,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.as_slice() {
         [flag, dir] if flag == "--ui" => tmux::ui_main(Path::new(dir)),
+        [cmd] if cmd == "answer" => answer::main(),
         _ => assuan::serve(&args),
     };
     match result {

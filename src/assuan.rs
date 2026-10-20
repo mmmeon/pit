@@ -1,13 +1,16 @@
 //! The pinentry side of the Assuan protocol that gpg-agent speaks.
 
+use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::process;
 
+use crate::answer;
 use crate::config::{Config, Hook};
 use crate::gpg;
+use crate::gui;
 use crate::origin;
 use crate::sys;
 use crate::tmux;
@@ -86,6 +89,11 @@ struct State {
     default_ok: Option<String>,
     default_cancel: Option<String>,
     default_prompt: Option<String>,
+    /// The X display, from --display or `display`.
+    display: Option<String>,
+    /// Every OPTION as sent, for a pinentry we hand the prompt to, but
+    /// those naming a terminal: it mustn't fall back to one.
+    options: Vec<String>,
 }
 
 impl State {
@@ -93,7 +101,11 @@ impl State {
         let arg = arg.trim();
         let (name, value) = arg.split_once(['=', ' ']).unwrap_or((arg, ""));
         let value = Some(text(value.trim_start_matches([' ', '='])));
-        match name.to_ascii_lowercase().as_str() {
+        let name = name.to_ascii_lowercase();
+        if !name.starts_with("tty") {
+            self.options.push(arg.to_string());
+        }
+        match name.as_str() {
             "ttyname" => self.ttyname = value,
             "owner" => {
                 self.owner = value.as_deref().and_then(origin::owner_pid);
@@ -103,6 +115,7 @@ impl State {
             "default-ok" => self.default_ok = value,
             "default-cancel" => self.default_cancel = value,
             "default-prompt" => self.default_prompt = value,
+            "display" => self.display = value,
             _ => {}
         }
     }
@@ -157,6 +170,7 @@ impl State {
             req.desc = gpg::add_name(&req.desc, &name);
         }
         let owner = self.requester();
+        let mut tried_gui = false;
         // The popup can land far from the command that asked; say which.
         // The hook is told too, wherever it's asked. The owner is who asked
         // even off the terminal gpg names, which may be stale ("not a tty",
@@ -178,6 +192,20 @@ impl State {
         // Like pinentry: the error and repeat prompt apply to one dialog only.
         self.error = None;
         self.repeat = None;
+
+        // Another pinentry, if there's a display for it. Never from a pit
+        // that was handed the prompt: it would only hand it on again.
+        let gui = cfg.gui.as_deref().filter(|_| env::var_os(gui::HANDOFF).is_none()).and_then(|program| {
+            let vars = gui::env(self.display.as_deref(), owner.or(self.owner));
+            gui::reachable(&vars).then_some((program, vars))
+        });
+        let hand_off = |req: &Request| gui.as_ref().and_then(|(program, vars)| gui::prompt(program, vars, &self.options, req, cfg.hook.as_deref()));
+        if cfg.gui_first && gui.is_some() {
+            match hand_off(&req) {
+                Some(outcome) => return Ok(Ok(outcome)),
+                None => tried_gui = true,
+            }
+        }
 
         // gpg sends GPG_TTY on every call, and ssh's tty is kept current with
         // UPDATESTARTUPTTY. If that's an ordinary terminal, the user is
@@ -222,28 +250,51 @@ impl State {
         // Outside tmux, no tmux client, or the popup failed: ask on the
         // terminal itself, if we know it and nothing else has it. Better to
         // not ask at all than to give away some of the passphrase.
-        let tty = match tty {
-            Some(tty) => tty,
-            None => {
+        let tty: Result<File, String> = match tty {
+            Some(tty) => Ok(tty),
+            None => 'tty: {
                 let Some(ttyname) = &self.ttyname else {
-                    return Ok(Err("no tmux client for a popup, and no terminal to ask on".into()));
+                    break 'tty Err("no tmux client for a popup, and no terminal to ask on".into());
                 };
                 // A pane only on the terms above, short of the command being
                 // in the foreground: never when inline prompts are off, nor
                 // over something full-screen.
                 if outside.is_none() && !(cfg.inline && tmux::pane_idle(ttyname)) {
-                    return Ok(Err("no popup, and the pane is busy or inline prompts are off".into()));
+                    break 'tty Err("no popup, and the pane is busy or inline prompts are off".into());
                 }
-                let tty = open(ttyname)?;
+                let tty = match open(ttyname) {
+                    Ok(tty) => tty,
+                    Err(e) => break 'tty Err(e.to_string()),
+                };
                 if !free(&tty) {
                     let why = "the terminal is in use by a full-screen program or another command";
-                    return Ok(Err(if self.proxied && owner.is_none() {
+                    break 'tty Err(if self.proxied && owner.is_none() {
                         format!("{why}, which can't be told apart from who asked through the proxy in front of gpg-agent")
                     } else {
                         why.into()
-                    }));
+                    });
                 }
-                tty
+                Ok(tty)
+            }
+        };
+        // Nowhere on a terminal: a window, unless that was tried first,
+        // then waiting for `pit answer`.
+        let tty = match tty {
+            Ok(tty) => tty,
+            Err(mut why) => {
+                if !tried_gui && gui.is_some() {
+                    if let Some(outcome) = hand_off(&req) {
+                        return Ok(Ok(outcome));
+                    }
+                    tried_gui = true;
+                }
+                if let (true, Some((program, _))) = (tried_gui, &gui) {
+                    why = format!("{why}, and {program} couldn't show it");
+                }
+                if cfg.pending {
+                    return answer::wait(&req, cfg.hook.as_deref()).map(Ok);
+                }
+                return Ok(Err(why));
             }
         };
         req.style = Style::Bar;
@@ -298,6 +349,7 @@ pub fn serve(args: &[String]) -> io::Result<()> {
         match flag {
             "--ttyname" | "-T" => st.ttyname = value(),
             "--ttytype" | "-N" => st.ttytype = value(),
+            "--display" | "-D" => st.display = value(),
             _ => {}
         }
     }
@@ -356,6 +408,8 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
                 default_ok: st.default_ok.take(),
                 default_cancel: st.default_cancel.take(),
                 default_prompt: st.default_prompt.take(),
+                display: st.display.take(),
+                options: std::mem::take(&mut st.options),
                 ..State::default()
             }
         }

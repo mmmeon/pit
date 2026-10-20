@@ -166,6 +166,13 @@ impl Request {
         }
         Some(req)
     }
+
+    /// The title, then who asked, for where there's no popup border to
+    /// fit it to.
+    pub fn heading(&self) -> String {
+        let mark = if self.guess { " ?" } else { "" };
+        if self.origin.is_empty() { self.title.clone() } else { format!("{} · {}{mark}", self.title, self.origin) }
+    }
 }
 
 pub enum Outcome {
@@ -859,6 +866,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn heading_names_who_asked() {
+        let req = Request { title: "gpg".into(), ..Request::default() };
+        assert_eq!(req.heading(), "gpg");
+        let req = Request { origin: "git commit @ work:2.1".into(), ..req };
+        assert_eq!(req.heading(), "gpg · git commit @ work:2.1");
+        assert_eq!(Request { guess: true, origin: "work:2.1".into(), ..req }.heading(), "gpg · work:2.1 ?");
     }
 
     #[test]

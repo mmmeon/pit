@@ -197,6 +197,7 @@ impl Sandbox {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("tmux")).unwrap();
         fs::create_dir_all(root.join("tmp")).unwrap();
+        fs::create_dir_all(root.join("run")).unwrap();
         Sandbox { root, _turn: turn }
     }
 
@@ -205,12 +206,17 @@ impl Sandbox {
         self.root.join("tmp")
     }
 
-    /// Points `cmd` at this sandbox's tmux server, TMPDIR and config.
+    /// Points `cmd` at this sandbox's tmux server, TMPDIR, runtime dir and
+    /// config, with no display.
     pub fn apply<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
         cmd.env_remove("TMUX")
             .env_remove("TMUX_PANE")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("PIT_HANDOFF")
             .env("TMUX_TMPDIR", self.root.join("tmux"))
             .env("TMPDIR", self.tmp())
+            .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
     }
 
@@ -422,8 +428,13 @@ pub struct Pinentry {
 
 impl Pinentry {
     pub fn spawn(sb: &Sandbox, args: &[&str]) -> Pinentry {
+        Pinentry::spawn_env(sb, args, &[])
+    }
+
+    /// Spawns it with `vars` added to its environment.
+    pub fn spawn_env(sb: &Sandbox, args: &[&str], vars: &[(&str, &str)]) -> Pinentry {
         let mut cmd = Command::new(BIN);
-        sb.apply(&mut cmd).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        sb.apply(&mut cmd).args(args).envs(vars.iter().copied()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = cmd.spawn().unwrap();
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());

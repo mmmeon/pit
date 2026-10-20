@@ -99,26 +99,26 @@ works" or "GUI whenever I'm at a desktop", and nothing in between.
 ```toml
 [gui]
 pinentry = "pinentry-qt"   # unset: no GUI fallback
-when = "last"              # last|first
+order = "last"             # last|first
 ```
 
 - `last`: inline on gpg's terminal → tmux popup → inline in a pane → GUI → pending.
 - `first`: GUI, if a display is reachable → then the same order as `last`, without
   the GUI.
 - The pending prompt (#5) is always last, since it needs the user to go and run
-  `pit answer`.
+  `pit answer`. It's opt-in (`pending = "wait"`): otherwise gpg run from cron
+  would wait, perhaps forever, where it fails at once today.
 
 ### When a display is reachable
 - X11: `DISPLAY` is set and its socket exists (`/tmp/.X11-unix/X<n>`). A TCP or
   ssh-forwarded display (`localhost:10`) has no local socket to check, so count it
   as reachable.
 - Wayland: `WAYLAND_DISPLAY` is set and `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` exists.
-- macOS: pinentry-mac doesn't use `DISPLAY`. Treat it as reachable unless it's an
-  ssh session with no `DISPLAY` (`SSH_CONNECTION` set).
-- Where the values come from: gpg-agent passes `--display` (ignored today) and
-  `OPTION display=`. Unknown yet whether `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` arrive
-  as `OPTION putenv=` or only in pit's environment; log one real session to find
-  out. Failing both, use the owner pid's `/proc/<pid>/environ`.
+- macOS: left out, since pit reads /proc and is Linux-only anyway.
+- Where the values come from: a logged gpg-agent session shows it passes
+  `--display`, and `DISPLAY`, `WAYLAND_DISPLAY` and `XDG_SESSION_TYPE` in the
+  pinentry's environment, but not `XDG_RUNTIME_DIR`: `/run/user/<uid>` stands in.
+  With no display variable at all, the owner pid's `/proc/<pid>/environ` is used.
 
 ### The hand-off
 - Starting the pinentry vs. the user cancelling: if it fails to start or exits
@@ -128,12 +128,14 @@ when = "last"              # last|first
 - Replay the OPTIONs pit has kept, then SETDESC/SETPROMPT/SETERROR/etc. The origin
   label goes into SETTITLE, so the dialog still says which command asked.
 - The hook fires with place `gui <program>`.
-- Refuse a `pinentry` that resolves to pit itself (e.g. via a `pinentry` symlink),
-  or it loops.
+- A pit that's handed the prompt doesn't hand it on again: the hand-off sets
+  `PIT_HANDOFF=1`, which also covers a `pinentry` symlink or wrapper to pit.
+- The GUI pinentry gets no `ttyname`/`ttytype`, so it can't fall back to a
+  terminal pit decided against.
 - In the code: a step in `ask()` in src/assuan.rs. For `first` it goes before the
   tty and tmux checks; for `last` it replaces the two "nowhere to ask" errors (no
   terminal, busy pane).
 
 ## Verification
-None for now. This is ideas only. Any idea we pick gets its own plan with tests (the
-existing pty + isolated tmux harness in tests/ can be extended).
+#1 and #5 are built, with tests in tests/fallback.rs: a fake pinentry script
+stands in for the GUI one, and `pit answer` runs on a pty.
