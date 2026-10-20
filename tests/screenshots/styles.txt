@@ -1,7 +1,7 @@
 --- style bar
 ┌─ gpg · git commit -S @ work:2.0 ─────────────────────────────────────┐
 │ Please enter the passphrase to unlock the OpenPGP secret key         │
-│ "Alice <alice@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2 │
+│ "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2   │
 │ created 2024-03-01.                                                  │
 │ Passphrase: [•·•·]                                                   │
 └──────────────────────────────────────────────────────────────────────┘
@@ -10,7 +10,7 @@
 --- style box
 ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
 │ Please enter the passphrase to unlock the OpenPGP secret key: │
-│ "Alice <alice@example.org>"                                   │
+│ "User <user@example.org>"                                     │
 │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
 │ created 2024-03-01.                                           │
 │                                                               │
@@ -18,7 +18,7 @@
 └───────────────────────────────────────────────────────────────┘
 
 --- style line
-┌─ gpg · Alice <alice@example.org> ───┐
-│ Passphrase: [•·•·]                  │
-└─────────────────────────────────────┘
+┌─ gpg · User <user@example.org> ───┐
+│ Passphrase: [•·•·]                │
+└───────────────────────────────────┘
 

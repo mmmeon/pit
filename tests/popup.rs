@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 
-const DESC: &str = "SETDESC Please enter the passphrase for%0A\"Alice <a@x>\"";
+const DESC: &str = "SETDESC Please enter the passphrase for%0A\"User <a@x>\"";
 
 /// Rows of `screen`, trimmed of trailing blanks.
 fn rows(screen: &vt100::Screen) -> Vec<String> {
@@ -70,7 +70,7 @@ fn bar_popup_along_the_bottom() {
     assert_eq!((left, right), (0, width - 1), "bar spans the client");
     assert_eq!(bottom, height - 2, "bar sits right above the status line");
     assert_eq!(bottom - top - 1, 2, "description + input");
-    assert!(rows[top + 1].contains("Please enter the passphrase for \"Alice <a@x>\""));
+    assert!(rows[top + 1].contains("Please enter the passphrase for \"User <a@x>\""));
     assert!(rows[top + 2].contains("Passphrase: [····]"));
 
     s.pty().send("hunter2\r");
@@ -92,7 +92,7 @@ fn box_popup_is_centred() {
     // Description, blank, input.
     assert_eq!(bottom - top - 1, 4, "{rows:#?}");
     assert!(rows[top + 1].contains("Please enter the passphrase for"));
-    assert!(rows[top + 2].contains("\"Alice <a@x>\""));
+    assert!(rows[top + 2].contains("\"User <a@x>\""));
     assert!(rows[top + 4].contains("PIN: [····]"));
     let (height, width) = s.pty().size();
     assert!(right - left + 1 < width);
@@ -116,7 +116,7 @@ fn line_popup_puts_summary_in_title() {
     let (top, bottom, _, _) = popup_box(&screen);
     let rows = rows(&screen);
     assert_eq!(bottom - top, 2, "{rows:#?}");
-    assert!(rows[top].contains(" Unlock · Alice <a@x> "), "{}", rows[top]);
+    assert!(rows[top].contains(" Unlock · User <a@x> "), "{}", rows[top]);
     assert!(rows[top + 1].contains("PIN: [····]"));
     assert!(!screen.contents().contains("Please enter"));
     s.pty().send("x\r");

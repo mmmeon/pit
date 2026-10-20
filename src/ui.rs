@@ -810,7 +810,7 @@ mod tests {
             title: "Unlock key".into(),
             origin: String::new(),
             guess: false,
-            desc: "Please enter the passphrase for\n\"Alice <a@x>\"\n100% sure? 漢字".into(),
+            desc: "Please enter the passphrase for\n\"User <a@x>\"\n100% sure? 漢字".into(),
             prompt: "Pass phrase:".into(),
             error: "Bad\rpassphrase".into(),
             repeat: Some("Repeat:".into()),
@@ -933,7 +933,7 @@ mod tests {
     #[test]
     fn wrap_never_exceeds_width() {
         let text = "Please enter the passphrase to unlock the OpenPGP secret key: \
-                    \"Ålice Ünicode 漢字テスト <alice@example.org>\" 3072-bit RSA key, \
+                    \"Üser Ünicode 漢字テスト <user@example.org>\" 3072-bit RSA key, \
                     ID 0123456789ABCDEF, created 2024-01-01. averyveryverylongwordindeed";
         for w in 1..60 {
             for line in wrap(text, w) {
@@ -948,9 +948,9 @@ mod tests {
 
     #[test]
     fn wrap_parts_keeps_parts_together() {
-        let parts = ["Unlock key", "Alice <a@x>", "RSA"];
-        assert_eq!(wrap_parts(parts.into_iter(), " · ", 100), ["Unlock key · Alice <a@x> · RSA"]);
-        assert_eq!(wrap_parts(parts.into_iter(), " · ", 20), ["Unlock key", "Alice <a@x> · RSA"]);
+        let parts = ["Unlock key", "User <a@x>", "RSA"];
+        assert_eq!(wrap_parts(parts.into_iter(), " · ", 100), ["Unlock key · User <a@x> · RSA"]);
+        assert_eq!(wrap_parts(parts.into_iter(), " · ", 20), ["Unlock key", "User <a@x> · RSA"]);
         assert_eq!(wrap_parts(["a b c d e f"].into_iter(), " · ", 5), ["a b c", "d e f"]);
     }
 
@@ -1003,12 +1003,12 @@ mod tests {
 
     #[test]
     fn phrases_and_summary() {
-        let paras = ["Please enter the passphrase to unlock", "the OpenPGP secret key:", "\"Alice <a@x>\"", "255-bit key,"];
+        let paras = ["Please enter the passphrase to unlock", "the OpenPGP secret key:", "\"User <a@x>\"", "255-bit key,"];
         assert_eq!(
             phrases(&paras),
-            ["Please enter the passphrase to unlock the OpenPGP secret key:", "\"Alice <a@x>\"", "255-bit key,"]
+            ["Please enter the passphrase to unlock the OpenPGP secret key:", "\"User <a@x>\"", "255-bit key,"]
         );
-        assert_eq!(summary(&paras).as_deref(), Some("Alice <a@x>"));
+        assert_eq!(summary(&paras).as_deref(), Some("User <a@x>"));
         assert_eq!(summary(&["Enter new", "passphrase:"]).as_deref(), Some("Enter new passphrase"));
         assert_eq!(summary(&[]), None);
     }
@@ -1018,7 +1018,7 @@ mod tests {
         let req = Request { kind: Kind::Pin, style: Style::Bar, error: String::new(), repeat: None, ..full_request() };
         let lay = layout(&req, 200);
         assert_eq!(lay.width, 200);
-        assert_eq!(lay.desc, ["Please enter the passphrase for \"Alice <a@x>\" · 100% sure? 漢字"]);
+        assert_eq!(lay.desc, ["Please enter the passphrase for \"User <a@x>\" · 100% sure? 漢字"]);
         assert_eq!((lay.error_row, lay.input_row, lay.rows), (None, 1, 2));
         assert_eq!(lay.title, " Unlock key ");
 
@@ -1056,13 +1056,13 @@ mod tests {
         let lay = layout(&req, 200);
         assert_eq!((lay.rows, lay.input_row, lay.error_row), (1, 0, None));
         assert!(lay.desc.is_empty());
-        assert_eq!(lay.title, " Unlock key · Alice <a@x> ");
+        assert_eq!(lay.title, " Unlock key · User <a@x> ");
         assert!(lay.width >= 30);
         assert_eq!(layout(&req, 12).width, 12);
 
         let req = Request { origin: "git commit @ work:2.1".into(), ..req };
         // The popup isn't widened for the origin, so it's cut to fit.
-        assert_eq!(layout(&req, 200).title, " Unlock key · Alice <a@x> · git commit @ wo… ");
+        assert_eq!(layout(&req, 200).title, " Unlock key · User <a@x> · git commit @ wor… ");
         assert_eq!(layout(&req, 200).width, layout(&Request { origin: String::new(), ..req.clone() }, 200).width);
         let req = Request { style: Style::Box, ..req };
         assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ wo… ");
@@ -1081,7 +1081,7 @@ mod tests {
         assert_eq!(title(" Unlock", "", true, 40), " Unlock ");
         for w in 1..40 {
             for guess in [false, true] {
-                let t = title(" Unlock · Alice <a@x>", "git commit @ work:2.1", guess, w);
+                let t = title(" Unlock · User <a@x>", "git commit @ work:2.1", guess, w);
                 assert!(width(&t) <= w.max(2), "w={w} {t:?}");
                 assert!(!t.trim_end().ends_with('·'), "w={w} {t:?}");
             }
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn layout_is_stable_at_its_own_width() {
-        let descs = ["", "Short", &"word ".repeat(30), "Please enter the passphrase for\n\"Alice <a@x>\"\n3072-bit RSA key"];
+        let descs = ["", "Short", &"word ".repeat(30), "Please enter the passphrase for\n\"User <a@x>\"\n3072-bit RSA key"];
         for desc in descs {
             for kind in [Kind::Pin, Kind::Confirm, Kind::Message] {
                 for style in [Style::Bar, Style::Box, Style::Line] {

@@ -32,12 +32,12 @@ fn input_text(pty: &Pty, row: u16) -> String {
 fn draws_in_place_and_erases_after() {
     let (_sb, pty, mut p) = setup();
     let modes = pty.modes();
-    p.setup(&["SETDESC Please enter the passphrase for%0A\"Alice <a@x>\"", "SETPROMPT Passphrase:"]);
+    p.setup(&["SETDESC Please enter the passphrase for%0A\"User <a@x>\"", "SETPROMPT Passphrase:"]);
     p.start("GETPIN");
 
     let screen = pty.wait_text("Passphrase:");
     assert_eq!(pty.row(0), "$ gpg --sign file");
-    assert_eq!(pty.row(1).trim(), "Please enter the passphrase for \"Alice <a@x>\"");
+    assert_eq!(pty.row(1).trim(), "Please enter the passphrase for \"User <a@x>\"");
     assert_eq!(pty.row(2).trim(), "Passphrase: [····]");
     assert!(screen.hide_cursor());
     assert_ne!(pty.modes(), modes, "terminal should be raw while prompting");

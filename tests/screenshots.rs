@@ -14,7 +14,7 @@ use common::*;
 const ROWS: u16 = 14;
 const COLS: u16 = 72;
 const DESC: &str = "SETDESC Please enter the passphrase to unlock the OpenPGP secret key:%0A\
-    \"Alice <alice@example.org>\"%0A255-bit EDDSA key, ID 3AA5C34371567BD2,%0Acreated 2024-03-01.";
+    \"User <user@example.org>\"%0A255-bit EDDSA key, ID 3AA5C34371567BD2,%0Acreated 2024-03-01.";
 
 fn rows(screen: &vt100::Screen) -> Vec<String> {
     let (_, cols) = screen.size();
@@ -176,7 +176,7 @@ fn echoes() {
         let d = Desk::new(&sb);
         sb.config(&format!("echo = \"{echo}\"\n[tmux]\nstyle = \"box\""));
         let mut p = d.pinentry();
-        p.setup(&["SETDESC Unlock \"Alice <alice@example.org>\"", "SETPROMPT Passphrase:"]);
+        p.setup(&["SETDESC Unlock \"User <user@example.org>\"", "SETPROMPT Passphrase:"]);
         p.start("GETPIN");
         d.client.pty.wait_text("Passphrase:");
         d.client.pty.send("hunter2");
@@ -239,7 +239,7 @@ fn dialogs() {
     p.setup(&[
         "SETDESC An ssh process requested the use of key%0A\
          SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE%0A\
-         (alice@laptop)%0ADo you want to allow this?",
+         (user@laptop)%0ADo you want to allow this?",
         "SETOK _Allow",
         "SETNOTOK _Deny",
     ]);

@@ -235,9 +235,9 @@ mod tests {
     fn picks_primary_user_id() {
         let listing = "pub:u:4096:1:401FEB2D1CDE5779:1753544617:::u:::cESCA::::::23::0:\n\
                        uid:r::::1::AAAA::Old <old@x>::::::::::0:\n\
-                       uid:u::::1753544617::C0CE::Alice\\x3a Work <a@x>::::::::::0:\n\
+                       uid:u::::1753544617::C0CE::User\\x3a Work <a@x>::::::::::0:\n\
                        sub:u:4096:1:D34730BA1575C063:1753544664:1830358800:::::a::::::23:\n";
-        assert_eq!(user_id(listing).as_deref(), Some("Alice: Work <a@x>"));
+        assert_eq!(user_id(listing).as_deref(), Some("User: Work <a@x>"));
         assert_eq!(user_id("pub:u:4096:1:401FEB2D1CDE5779:1:::u:::cESCA:\n"), None);
         assert_eq!(user_id(""), None);
     }
@@ -303,8 +303,8 @@ mod tests {
     fn name_goes_next_to_the_fingerprint() {
         let ssh = "Please enter the passphrase for the ssh key\n  SHA256:xkwLotlAn0n11CS5wQxDJgwquzzGFAcI7qTH0LAY9zM";
         assert_eq!(
-            add_name(ssh, "Alice <a@x>"),
-            "Please enter the passphrase for the ssh key\n  SHA256:xkwLotlAn0n11CS5wQxDJgwquzzGFAcI7qTH0LAY9zM \"Alice <a@x>\""
+            add_name(ssh, "User <a@x>"),
+            "Please enter the passphrase for the ssh key\n  SHA256:xkwLotlAn0n11CS5wQxDJgwquzzGFAcI7qTH0LAY9zM \"User <a@x>\""
         );
         let md5 = "Key\n  MD5:0a:1b:2c:3d:4e:5f:60:71:82:93:a4:b5:c6:d7:e8:f9";
         assert!(add_name(md5, "A").ends_with("f9 \"A\""));

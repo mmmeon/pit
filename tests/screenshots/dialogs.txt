@@ -1,7 +1,7 @@
 --- wrong passphrase
 ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
 │ Please enter the passphrase to unlock the OpenPGP secret key: │
-│ "Alice <alice@example.org>"                                   │
+│ "User <user@example.org>"                                     │
 │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
 │ created 2024-03-01.                                           │
 │                                                               │
@@ -29,7 +29,7 @@
 ┌─ gpg · git commit -S @ work:2.0 ───────────────────┐
 │ An ssh process requested the use of key            │
 │ SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE │
-│ (alice@laptop)                                     │
+│ (user@laptop)                                      │
 │ Do you want to allow this?                         │
 │                                                    │
 │ ⏎ Allow   d Deny   esc Cancel                      │

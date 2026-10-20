@@ -78,7 +78,7 @@ screenshots
 
     ┌─ gpg · git commit -S @ work:2.0 ─────────────────────────────────────┐
     │ Please enter the passphrase to unlock the OpenPGP secret key         │
-    │ "Alice <alice@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2 │
+    │ "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2   │
     │ created 2024-03-01.                                                  │
     │ Passphrase: [•·•·]                                                   │
     └──────────────────────────────────────────────────────────────────────┘
@@ -88,7 +88,7 @@ screenshots
 
     ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
     │ Please enter the passphrase to unlock the OpenPGP secret key: │
-    │ "Alice <alice@example.org>"                                   │
+    │ "User <user@example.org>"                                     │
     │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
     │ created 2024-03-01.                                           │
     │                                                               │
@@ -97,21 +97,21 @@ screenshots
 
   line, the description summed up in the title:
 
-    ┌─ gpg · Alice <alice@example.org> ───┐
-    │ Passphrase: [••·•]                  │
-    └─────────────────────────────────────┘
+    ┌─ gpg · User <user@example.org> ───┐
+    │ Passphrase: [••·•]                │
+    └───────────────────────────────────┘
 
   echo marker, dots, none (after typing 7 characters):
 
-    │ Passphrase: [•··•]                 │
-    │ Passphrase: •••••••                │
-    │ Passphrase:                        │
+    │ Passphrase: [•··•]               │
+    │ Passphrase: •••••••              │
+    │ Passphrase:                      │
 
   wrong passphrase:
 
     ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
     │ Please enter the passphrase to unlock the OpenPGP secret key: │
-    │ "Alice <alice@example.org>"                                   │
+    │ "User <user@example.org>"                                     │
     │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
     │ created 2024-03-01.                                           │
     │                                                               │
@@ -133,7 +133,7 @@ screenshots
     ┌─ gpg · git commit -S @ work:2.0 ───────────────────┐
     │ An ssh process requested the use of key            │
     │ SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE │
-    │ (alice@laptop)                                     │
+    │ (user@laptop)                                      │
     │ Do you want to allow this?                         │
     │                                                    │
     │ ⏎ Allow   d Deny   esc Cancel                      │
@@ -155,7 +155,7 @@ screenshots
 
     ~/src/notes $ git commit -S -m 'Fix typo'
      Please enter the passphrase to unlock the OpenPGP secret key
-     "Alice <alice@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2
+     "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2
      created 2024-03-01.
      Passphrase: [••··]
 
