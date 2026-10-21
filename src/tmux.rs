@@ -1,7 +1,7 @@
 //! Finding the tmux client and running the prompt in a popup on it.
 
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
@@ -213,6 +213,22 @@ fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, d
 /// Runs inside the popup: show the prompt and send back the answer.
 pub fn ui_main(dir: &Path) -> io::Result<()> {
     sys::ignore_interrupts();
+    let opened = open_request(dir);
+    // Everything's open, or never will be: either way the files aren't
+    // needed. Cleaning up here means the directory goes away even if the
+    // wrapper is killed, before we were up or after.
+    let _ = fs::remove_dir_all(dir);
+    let (mut resp, ctl, req) = opened?;
+    sys::set_nonblocking(resp.as_raw_fd(), false)?;
+    resp.write_all(b"READY\n")?;
+
+    let tty = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+    let outcome = ui::run(&tty, &req, Some(&ctl), false)?;
+    resp.write_all(&outcome.encode().0)
+}
+
+/// The wrapper's fifos and request in `dir`: (resp, ctl, request).
+fn open_request(dir: &Path) -> io::Result<(File, File, Request)> {
     // Non-blocking opens fail instead of hanging if the wrapper is gone.
     let open = |write: bool| {
         OpenOptions::new()
@@ -221,19 +237,11 @@ pub fn ui_main(dir: &Path) -> io::Result<()> {
             .custom_flags(libc::O_NONBLOCK)
             .clone()
     };
-    let mut resp = open(true).open(dir.join("resp"))?;
+    let resp = open(true).open(dir.join("resp"))?;
     let ctl = open(false).open(dir.join("ctl"))?;
     let req = fs::read_to_string(dir.join("req"))?;
     let req = Request::decode(&req).ok_or(io::ErrorKind::InvalidData)?;
-    // Everything's open, so the files aren't needed. Cleaning up here means
-    // the directory goes away even if the wrapper is killed.
-    let _ = fs::remove_dir_all(dir);
-    sys::set_nonblocking(resp.as_raw_fd(), false)?;
-    resp.write_all(b"READY\n")?;
-
-    let tty = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
-    let outcome = ui::run(&tty, &req, Some(&ctl), false)?;
-    resp.write_all(&outcome.encode().0)
+    Ok((resp, ctl, req))
 }
 
 #[cfg(test)]
@@ -247,6 +255,21 @@ mod tests {
         assert_eq!(shell_quote(b"it's"), r"'it'\''s'");
         assert_eq!(shell_quote(b"$(x) `y` \"z\""), "'$(x) `y` \"z\"'");
         assert_eq!(shell_quote(b""), "''");
+    }
+
+    #[test]
+    fn popup_cleans_up_even_without_its_wrapper() {
+        // The wrapper killed before the popup opened its fifos: nobody else
+        // will remove them.
+        let base = env::temp_dir().join(format!("pit-tmux-test-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let dir = sys::mkdtemp(&base).unwrap();
+        fs::write(dir.join("req"), Request::default().encode()).unwrap();
+        sys::mkfifo(&dir.join("resp")).unwrap();
+        sys::mkfifo(&dir.join("ctl")).unwrap();
+        assert!(ui_main(&dir).is_err());
+        assert!(!dir.exists(), "{} left behind", dir.display());
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
