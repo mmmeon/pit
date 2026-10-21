@@ -184,10 +184,23 @@ pub fn ignore_interrupts() {
 }
 
 /// Keeps the passphrase out of core dumps, and other processes of ours
-/// (a debugger) from reading our memory. Reset on exec, so the programs we
-/// run are unaffected.
-pub fn no_dumps() {
-    unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) };
+/// (a debugger) from reading our memory; and what's mapped so far, the
+/// stack included, out of swap. Neither survives exec, so the programs we
+/// run are unaffected. Locking may be refused (RLIMIT_MEMLOCK), and then
+/// things carry on as before: it's for the passphrase, not required by it.
+pub fn protect_memory() {
+    unsafe {
+        libc::prctl(libc::PR_SET_DUMPABLE, 0);
+        libc::mlockall(libc::MCL_CURRENT);
+    }
+}
+
+/// Keeps the pages holding `bytes` out of swap, if allowed. They're never
+/// unlocked: a page may hold more than one secret, and we don't live long.
+pub fn lock(bytes: &[u8]) {
+    if !bytes.is_empty() {
+        unsafe { libc::mlock(bytes.as_ptr().cast(), bytes.len()) };
+    }
 }
 
 const CAUGHT: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];

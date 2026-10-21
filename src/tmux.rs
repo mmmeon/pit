@@ -179,7 +179,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, d
             chunk.fill(0);
         }
         if let Some(i) = buf.0.iter().position(|&b| b == b'\n') {
-            let line = Secret(buf.0.drain(..=i).collect());
+            let line = Secret::from(buf.0.drain(..=i).collect::<Vec<u8>>());
             if line.0 != b"READY\n" {
                 break Ok(Some(Outcome::decode(&line.0)));
             }

@@ -49,7 +49,7 @@ settings: ~/.config/pit/config.toml ($XDG_CONFIG_HOME/pit/config.toml)
 ";
 
 fn main() -> ExitCode {
-    sys::no_dumps();
+    sys::protect_memory();
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.as_slice() {
         [flag, dir] if flag == "--ui" => tmux::ui_main(Path::new(dir)),

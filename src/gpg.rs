@@ -61,7 +61,7 @@ pub fn card_name(desc: &str) -> Option<String> {
 /// not even protected.
 fn read_key(path: &Path) -> Option<Secret> {
     let mut file = File::open(path).ok()?;
-    let mut buf = Secret(vec![0; MAX_KEY_FILE]);
+    let mut buf = Secret::from(vec![0; MAX_KEY_FILE]);
     let mut n = 0;
     while n < buf.0.len() {
         match file.read(&mut buf.0[n..]) {

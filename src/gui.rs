@@ -144,7 +144,7 @@ impl Pinentry {
     fn line(&mut self) -> io::Result<Option<Secret>> {
         loop {
             if let Some(i) = self.buf.0.iter().position(|&b| b == b'\n') {
-                let mut line = Secret(self.buf.0.drain(..=i).collect());
+                let mut line = Secret::from(self.buf.0.drain(..=i).collect::<Vec<u8>>());
                 line.0.pop();
                 return Ok(Some(line));
             }
@@ -175,7 +175,7 @@ impl Pinentry {
                 return Ok(Some(Reply { data, repeated, result: Err(code.unwrap_or(0) & 0xffff) }));
             }
             if let Some(d) = r.strip_prefix(b"D ") {
-                data.extend(&Secret(unescape(d)).0);
+                data.extend(&Secret::from(unescape(d)).0);
             } else if r == b"S PIN_REPEATED" {
                 repeated = true;
             }

@@ -64,7 +64,8 @@ names!(Kind { Pin = "pin", Confirm = "confirm", Message = "message" });
 names!(Style { Bar = "bar", Box = "box", Line = "line" });
 names!(Echo { Marker = "marker", Dots = "dots", None = "none" });
 
-/// Bytes that are zeroed when dropped, for anything holding a passphrase.
+/// Bytes kept out of swap while they live and zeroed when dropped, for
+/// anything holding a passphrase.
 pub struct Secret(pub Vec<u8>);
 
 impl Secret {
@@ -73,7 +74,7 @@ impl Secret {
     }
 
     pub fn with_capacity(n: usize) -> Secret {
-        Secret(Vec::with_capacity(n))
+        Secret::from(Vec::with_capacity(n))
     }
 
     /// Appends `bytes`. Growing moves to a bigger buffer and zeroes the old
@@ -86,6 +87,14 @@ impl Secret {
             mem::swap(self, &mut bigger);
         }
         self.0.extend_from_slice(bytes);
+    }
+}
+
+impl From<Vec<u8>> for Secret {
+    /// Takes `v` over, locking the whole of its allocation.
+    fn from(v: Vec<u8>) -> Secret {
+        sys::lock(unsafe { std::slice::from_raw_parts(v.as_ptr(), v.capacity()) });
+        Secret(v)
     }
 }
 
@@ -228,7 +237,7 @@ impl Outcome {
             b"TIMEOUT" => Outcome::Timeout,
             _ => match line.strip_prefix(b"PIN ") {
                 Some(rest) if rest.len() >= 2 => Outcome::Pin {
-                    pin: Secret(unescape(&rest[2..])),
+                    pin: Secret::from(unescape(&rest[2..])),
                     repeated: rest[0] == b'1',
                 },
                 _ => Outcome::Cancel,
@@ -961,7 +970,7 @@ mod tests {
     fn outcome_round_trips() {
         let secret = "p%ss\nwörd\x01 ".as_bytes().to_vec();
         for repeated in [false, true] {
-            let line = Outcome::Pin { pin: Secret(secret.clone()), repeated }.encode();
+            let line = Outcome::Pin { pin: Secret::from(secret.clone()), repeated }.encode();
             assert_eq!(line.0.iter().filter(|&&b| b == b'\n').count(), 1);
             assert_eq!(pin(Outcome::decode(&line.0)), (secret.clone(), repeated));
         }
@@ -983,7 +992,7 @@ mod tests {
     fn outcome_keeps_non_utf8_pin_bytes() {
         // A Latin-1 terminal sends é as the single byte 0xe9.
         let secret = vec![b'p', 0xe9, b'x'];
-        let line = Outcome::Pin { pin: Secret(secret.clone()), repeated: false }.encode();
+        let line = Outcome::Pin { pin: Secret::from(secret.clone()), repeated: false }.encode();
         assert_eq!(pin(Outcome::decode(&line.0)).0, secret);
     }
 
