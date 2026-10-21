@@ -750,6 +750,24 @@ impl Ui<'_> {
                         }
                     }
                     Some(b'O') if self.more()? => drop(self.next()),
+                    // A string (OSC, DCS, APC, PM, SOS), up to BEL or ESC \:
+                    // the terminal's answer to a query, perhaps one put in
+                    // the prompt's text. Taken whole, or its text would
+                    // land in the passphrase or press a button.
+                    Some(b']' | b'P' | b'_' | b'^' | b'X') => {
+                        while self.more()? {
+                            match self.next().unwrap() {
+                                0x07 => break,
+                                0x1b => {
+                                    if self.more()? && self.pending.0[0] == b'\\' {
+                                        self.next();
+                                    }
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 Key::Ignore

@@ -91,6 +91,31 @@ fn escape_sequences_are_ignored() {
 }
 
 #[test]
+fn terminal_answers_are_not_keys() {
+    // What a terminal sends back for a query: a colour, its version, the
+    // clipboard. None of it is typed, in a passphrase or at a button.
+    const ANSWERS: [&str; 4] = ["\x1b]11;rgb:aaaa/bbbb/cccc\x1b\\", "\x1bP>|foot(1.16.2)\x1b\\", "\x1b]52;c;b2s=\x07", "\x1b_Gi=1;OK\x1b\\"];
+    let (_sb, pty, mut p) = setup();
+    p.start("GETPIN");
+    pty.wait_text("PIN:");
+    for seq in ANSWERS {
+        pty.send(seq);
+    }
+    pty.send("ok\r");
+    assert_eq!(p.finish(), ["D ok", "OK"]);
+
+    let (_sb, pty, mut p) = setup();
+    p.setup(&["SETDESC Really?", "SETOK _Allow", "SETNOTOK _Deny"]);
+    p.start("CONFIRM");
+    pty.wait_text("⏎ Allow   d Deny   esc Cancel");
+    for seq in ANSWERS {
+        pty.send(seq);
+    }
+    pty.send("\x1b");
+    assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
+}
+
+#[test]
 fn control_characters_in_the_text_do_not_reach_the_terminal() {
     // A remote client sets the key description; it mustn't redraw the
     // prompt over the note that says so, or have the terminal answer.
