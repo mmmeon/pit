@@ -248,12 +248,10 @@ pub fn in_foreground(pid: u32, tty: &str) -> bool {
 /// Whether something other than the requester `owner` may be reading the
 /// terminal `dev`, and would take some of the passphrase (`cat | gpg -d`, or
 /// `cat` in the foreground with gpg elsewhere): a process in its foreground
-/// job with it as input. If `owner` is in that job, those above it are
-/// waiting on it. One we may not look at (sudo) could be reading. One that
-/// opens /dev/tty itself isn't seen, but those (pagers, editors) mostly put
-/// it in raw mode, which the caller checks. Without an owner, the requester
-/// can't be told apart from anyone else, so anything reading counts: better
-/// not to ask than to give away some of the passphrase.
+/// job that reads it (see `reads`). If `owner` is in that job, those above
+/// it are waiting on it. Without an owner, the requester can't be told
+/// apart from anyone else, so anything reading counts: better not to ask
+/// than to give away some of the passphrase.
 pub fn other_reader(dev: u64, owner: Option<u32>) -> bool {
     let Ok(procs) = fs::read_dir("/proc") else { return true };
     let procs: Vec<u32> = procs.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
@@ -269,13 +267,36 @@ pub fn other_reader(dev: u64, owner: Option<u32>) -> bool {
         Some(owner) if stat(owner, 2) == Some(fg) => ancestors(owner),
         _ => Vec::new(),
     };
-    procs
-        .into_iter()
-        .filter(|p| !waiting.contains(p) && stat(*p, 2) == Some(fg))
-        .any(|p| match fs::metadata(format!("/proc/{p}/fd/0")) {
-            Ok(m) => m.rdev() == dev,
-            Err(e) => e.kind() == io::ErrorKind::PermissionDenied,
-        })
+    procs.into_iter().filter(|p| !waiting.contains(p) && stat(*p, 2) == Some(fg)).any(|p| reads(p, dev))
+}
+
+/// Whether `p` has the terminal `dev` to read from: as its input, or opened
+/// by itself (ssh at the other end of a pipe asking for a password, sudo),
+/// which is only ever done to ask something. Not through its output alone:
+/// every command in a pipeline has the terminal for that. One we may not
+/// look at could be reading.
+fn reads(p: u32, dev: u64) -> bool {
+    // Opened as /dev/tty, the file is that device, standing for the
+    // process's controlling terminal: `dev`, if that's what it controls.
+    let dev_tty = stat(p, 4).is_some_and(|t| t as u64 == dev).then(|| libc::makedev(5, 0));
+    let on_tty = |path: &str| fs::metadata(path).map(|m| m.rdev() == dev || Some(m.rdev()) == dev_tty);
+    match on_tty(&format!("/proc/{p}/fd/0")) {
+        Ok(true) => return true,
+        Ok(false) => {}
+        Err(e) => return e.kind() == io::ErrorKind::PermissionDenied,
+    }
+    let Ok(fds) = fs::read_dir(format!("/proc/{p}/fd")) else { return false };
+    fds.flatten().any(|e| {
+        let fd: u32 = e.file_name().to_str().and_then(|n| n.parse().ok()).unwrap_or(0);
+        fd > 2 && on_tty(&e.path().to_string_lossy()).unwrap_or(false) && readable(p, fd)
+    })
+}
+
+/// Whether `p` has `fd` open for reading, from its flags in fdinfo.
+fn readable(p: u32, fd: u32) -> bool {
+    let Ok(info) = fs::read_to_string(format!("/proc/{p}/fdinfo/{fd}")) else { return true };
+    let flags = info.lines().find_map(|l| l.strip_prefix("flags:")).and_then(|f| u32::from_str_radix(f.trim(), 8).ok());
+    flags.is_none_or(|f| f & libc::O_ACCMODE as u32 != libc::O_WRONLY as u32)
 }
 
 fn comm(pid: u32) -> Option<String> {
@@ -422,6 +443,21 @@ Num       RefCount Protocol Flags    Type St Inode Path
         assert!(!is_tty("not a tty"));
         assert!(!is_tty("/nonexistent"));
         assert!(!is_tty("/dev/null"));
+    }
+
+    #[test]
+    fn open_for_reading_is_told_from_the_flags() {
+        use std::os::fd::AsRawFd;
+        let me = std::process::id();
+        let fd = |f: &fs::File| f.as_raw_fd() as u32;
+        let w = fs::File::options().write(true).open("/dev/null").unwrap();
+        assert!(!readable(me, fd(&w)));
+        let r = fs::File::open("/dev/null").unwrap();
+        assert!(readable(me, fd(&r)));
+        let rw = fs::File::options().read(true).write(true).open("/dev/null").unwrap();
+        assert!(readable(me, fd(&rw)));
+        // Nothing to go on: taken for a reader.
+        assert!(readable(me, 9999));
     }
 
     #[test]

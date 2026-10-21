@@ -227,7 +227,7 @@ fn popup_main(dir: &Path) -> io::Result<()> {
     resp.write_all(b"READY\n")?;
 
     let tty = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
-    let outcome = ui::run(&tty, &req, Some(&ctl), false)?;
+    let outcome = ui::run(&tty, &req, Some(&ctl), false, None)?;
     resp.write_all(&outcome.encode().0)
 }
 

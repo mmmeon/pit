@@ -129,7 +129,7 @@ fn ask(mut stream: UnixStream, mut req: Request) -> io::Result<()> {
     let head = req.heading();
     let (head, _) = ui::split_at_width(&head, req.width);
     (&tty).write_all(format!("\r\x1b[2m {head}\x1b[0m\r\n").as_bytes())?;
-    let outcome = ui::run(&tty, &req, Some(&ctl), true);
+    let outcome = ui::run(&tty, &req, Some(&ctl), true, None);
     (&tty).write_all(b"\x1b[A\r\x1b[J")?;
     stream.write_all(&outcome?.encode().0)
 }

@@ -324,7 +324,11 @@ impl State {
         req.width = sys::winsize(tty.as_raw_fd()).map_or(78, |(cols, _)| cols).saturating_sub(2);
         let place = format!("inline {}", self.ttyname.as_deref().unwrap_or_default());
         let hook = Hook::open(cfg.hook.as_deref(), &req, &place);
-        let outcome = ui::run(&tty, &req, None, true);
+        // Looked for again while the prompt is up: a reader that opens the
+        // terminal only once it's its turn (ssh at the other end of a pipe).
+        let dev = tty.metadata()?.rdev();
+        let taken = || origin::other_reader(dev, asker);
+        let outcome = ui::run(&tty, &req, None, true, Some(&taken));
         drop(hook);
         outcome.map(Ok)
     }
@@ -356,6 +360,9 @@ fn data(out: &mut impl Write, value: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Why a prompt was given up on: something else started reading there.
+const TAKEN: &str = "another command started reading the terminal";
 
 fn no_pinentry(why: impl std::fmt::Display) -> Result<(), Failure> {
     fail(ERR_NO_PIN_ENTRY, &format!("No pinentry ({why})"))
@@ -460,6 +467,7 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
                     Ok(())
                 }
                 Ok(Ok(Outcome::Timeout)) => fail(ERR_TIMEOUT, "Timeout"),
+                Ok(Ok(Outcome::Taken)) => no_pinentry(TAKEN),
                 Ok(Ok(_)) => fail(ERR_CANCELED, "Operation cancelled"),
                 Ok(Err(why)) => no_pinentry(why),
                 Err(e) => no_pinentry(e),
@@ -472,6 +480,7 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
             };
             return Ok(match st.ask(kind) {
                 Ok(Ok(Outcome::Timeout)) => fail(ERR_TIMEOUT, "Timeout"),
+                Ok(Ok(Outcome::Taken)) => no_pinentry(TAKEN),
                 Ok(Ok(_)) if kind == Kind::Message => Ok(()),
                 Ok(Ok(Outcome::Ok)) => Ok(()),
                 Ok(Ok(Outcome::NotOk)) => fail(ERR_NOT_CONFIRMED, "Not confirmed"),

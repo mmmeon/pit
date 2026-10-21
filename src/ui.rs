@@ -205,6 +205,8 @@ pub enum Outcome {
     NotOk,
     Cancel,
     Timeout,
+    /// Something else started reading the terminal while the prompt was up.
+    Taken,
 }
 
 impl Outcome {
@@ -224,6 +226,7 @@ impl Outcome {
             Outcome::NotOk => s.0.extend_from_slice(b"NOTOK"),
             Outcome::Cancel => s.0.extend_from_slice(b"CANCEL"),
             Outcome::Timeout => s.0.extend_from_slice(b"TIMEOUT"),
+            Outcome::Taken => s.0.extend_from_slice(b"TAKEN"),
         }
         s.0.push(b'\n');
         s
@@ -235,6 +238,7 @@ impl Outcome {
             b"OK" => Outcome::Ok,
             b"NOTOK" => Outcome::NotOk,
             b"TIMEOUT" => Outcome::Timeout,
+            b"TAKEN" => Outcome::Taken,
             _ => match line.strip_prefix(b"PIN ") {
                 Some(rest) if rest.len() >= 2 => Outcome::Pin {
                     pin: Secret::from(unescape(&rest[2..])),
@@ -567,12 +571,21 @@ enum Key {
     Ignore,
     Timeout,
     Hangup,
+    /// The terminal is no longer ours alone.
+    Taken,
 }
+
+/// How often to look again for another reader of the terminal.
+const WATCH_EVERY: Duration = Duration::from_millis(250);
 
 struct Ui<'a> {
     tty: &'a File,
     ctl: Option<&'a File>,
     interrupts: Option<&'a sys::Interrupts>,
+    /// Says whether something else has started reading the terminal; asked
+    /// every WATCH_EVERY while waiting for keys.
+    watch: Option<&'a dyn Fn() -> bool>,
+    watched: Instant,
     req: &'a Request,
     lay: Layout,
     inline: bool,
@@ -590,8 +603,10 @@ struct Ui<'a> {
 /// Shows the prompt on `tty` and waits for an answer. `inline` draws in place
 /// on an ordinary terminal instead of filling a popup. The prompt gives up if
 /// `ctl` hangs up, which means the wrapper has gone away, or, inline, when
-/// we're interrupted.
-pub fn run(tty: &File, req: &Request, ctl: Option<&File>, inline: bool) -> io::Result<Outcome> {
+/// we're interrupted; and when `watch` says the terminal has another reader,
+/// which would take some of the keys: a command that opened it after the
+/// prompt went up (ssh asking for a password at the other end of a pipe).
+pub fn run(tty: &File, req: &Request, ctl: Option<&File>, inline: bool, watch: Option<&dyn Fn() -> bool>) -> io::Result<Outcome> {
     // Before raw mode, so it's never left behind; dropped after it.
     let interrupts = inline.then(sys::Interrupts::catch).transpose()?;
     let _raw = sys::RawMode::enable(tty.as_raw_fd())?;
@@ -599,6 +614,8 @@ pub fn run(tty: &File, req: &Request, ctl: Option<&File>, inline: bool) -> io::R
         tty,
         ctl,
         interrupts: interrupts.as_ref(),
+        watch,
+        watched: Instant::now(),
         req,
         lay: layout(req, req.width),
         inline,
@@ -737,12 +754,24 @@ impl Ui<'_> {
         let mut fds = vec![self.tty.as_raw_fd()];
         fds.extend(self.ctl.map(|c| c.as_raw_fd()));
         fds.extend(self.interrupts.map(|i| i.fd()));
-        let revents = sys::poll(&fds, timeout)?;
+        // Waking to look again isn't the timeout asked for.
+        let cut = self.watch.is_some() && timeout.is_none_or(|t| t > WATCH_EVERY);
+        let revents = sys::poll(&fds, if cut { Some(WATCH_EVERY) } else { timeout })?;
+        if let Some(taken) = self.watch
+            && self.watched.elapsed() >= WATCH_EVERY
+        {
+            self.watched = Instant::now();
+            // Before reading: what's typed and not yet read is flushed with
+            // the terminal's modes, not left to the other reader.
+            if taken() {
+                return Ok(Some(Key::Taken));
+            }
+        }
         if revents[1..].iter().any(|&r| r != 0) || revents[0] & (libc::POLLHUP | libc::POLLERR) != 0 {
             return Ok(Some(Key::Hangup));
         }
         if revents[0] == 0 {
-            return Ok(Some(Key::Timeout));
+            return Ok(if cut { None } else { Some(Key::Timeout) });
         }
         let mut buf = [0; 64];
         let n = (&mut &*self.tty).read(&mut buf)?;
@@ -882,6 +911,7 @@ impl Ui<'_> {
                 Key::Eof if !self.pin.0.is_empty() => continue,
                 Key::Cancel | Key::Eof | Key::Hangup => return Ok(Outcome::Cancel),
                 Key::Timeout => return Ok(Outcome::Timeout),
+                Key::Taken => return Ok(Outcome::Taken),
                 Key::Ignore => continue,
             }
             self.refresh()?;
@@ -897,6 +927,7 @@ impl Ui<'_> {
                 Key::Cancel | Key::Hangup if !message => break Choice::Cancel,
                 Key::Cancel | Key::Hangup => break Choice::Ok,
                 Key::Timeout => return Ok(Outcome::Timeout),
+                Key::Taken => return Ok(Outcome::Taken),
                 Key::Text(mut text) => {
                     let c = String::from_utf8_lossy(&text).chars().next().map(|c| c.to_ascii_lowercase());
                     // It may be a passphrase typed at the wrong prompt.

@@ -348,6 +348,28 @@ fn another_reader_in_the_foreground_is_not_asked() {
 }
 
 #[test]
+fn a_reader_that_opens_the_terminal_later_cancels_the_prompt() {
+    // gpg -d x | ssh host cmd: ssh opens the terminal for its password only
+    // once connected, after the prompt is up. Its input is the pipe, so
+    // only the terminal it opened itself gives it away.
+    let (_sb, pty, mut p) = setup();
+    let modes = pty.modes();
+    let uid = unsafe { libc::getuid() };
+    p.setup(&[&format!("OPTION owner={}/{uid}", std::process::id())]);
+    p.start("GETPIN");
+    pty.wait_text("PIN:");
+    pty.send("hun");
+    let ssh = Killed(pty.command("sh").args(["-c", "exec 3<>/dev/tty 0</dev/null; exec sleep 999"]).spawn().unwrap());
+    let reply = p.finish();
+    assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY), "{reply:?}");
+    assert!(reply[0].contains("another command started reading"), "{reply:?}");
+    let screen = pty.wait_gone("PIN:");
+    assert_eq!(screen.contents().trim_end(), "$ gpg --sign file");
+    assert_eq!(pty.modes(), modes);
+    drop(ssh);
+}
+
+#[test]
 fn hook_is_ignored_from_a_config_others_can_write() {
     use std::os::unix::fs::PermissionsExt;
     let (sb, pty, mut p) = setup();
