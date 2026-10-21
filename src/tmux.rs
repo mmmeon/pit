@@ -213,6 +213,10 @@ fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, d
 /// Runs inside the popup: show the prompt and send back the answer.
 pub fn ui_main(dir: &Path) -> io::Result<()> {
     sys::ignore_interrupts();
+    popup_main(dir)
+}
+
+fn popup_main(dir: &Path) -> io::Result<()> {
     let opened = open_request(dir);
     // Everything's open, or never will be: either way the files aren't
     // needed. Cleaning up here means the directory goes away even if the
@@ -267,7 +271,7 @@ mod tests {
         fs::write(dir.join("req"), Request::default().encode()).unwrap();
         sys::mkfifo(&dir.join("resp")).unwrap();
         sys::mkfifo(&dir.join("ctl")).unwrap();
-        assert!(ui_main(&dir).is_err());
+        assert!(popup_main(&dir).is_err());
         assert!(!dir.exists(), "{} left behind", dir.display());
         let _ = fs::remove_dir_all(&base);
     }
