@@ -4,7 +4,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::process;
 
 use crate::answer;
@@ -216,7 +216,13 @@ impl State {
         // gpg sends GPG_TTY on every call, and ssh's tty is kept current with
         // UPDATESTARTUPTTY. If that's an ordinary terminal, the user is
         // there, not in tmux, even if a tmux client is attached elsewhere.
-        let open = |t: &str| OpenOptions::new().read(true).write(true).open(t);
+        // Without making it our controlling terminal, or waiting for a
+        // serial line's carrier; blocking again once open, for the prompt.
+        let open = |t: &str| {
+            let f = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(t)?;
+            sys::set_nonblocking(f.as_raw_fd(), false)?;
+            Ok::<_, io::Error>(f)
+        };
         // Something else reading keys there would get some of them, and
         // they're a passphrase: a full-screen program, or another command.
         // A proxy whose client isn't clear still counts here: it isn't in
