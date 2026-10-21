@@ -431,6 +431,17 @@ fn summary(paras: &[&str]) -> Option<String> {
     phrases(paras).first().map(|p| p.trim_end_matches(':').to_string())
 }
 
+/// The description's first paragraph, when a blank line sets it apart from
+/// the rest. That's where gpg-agent puts its note on a request from a
+/// remote site or the browser, in the user's language, ahead of the text
+/// the client chose: the one sign of where the request came from.
+fn lead(desc: &str) -> Option<String> {
+    let mut lines = desc.lines().map(str::trim).skip_while(|l| l.is_empty());
+    let first: Vec<&str> = lines.by_ref().take_while(|l| !l.is_empty()).collect();
+    let more = lines.any(|l| !l.is_empty());
+    (more && !first.is_empty()).then(|| first.join(" "))
+}
+
 /// Where everything goes. The popup is sized from this, so the wrapper and
 /// the popup must compute the same thing from the same Request.
 pub struct Layout {
@@ -490,10 +501,14 @@ pub fn layout(req: &Request, max: usize) -> Layout {
             Layout { title, desc, error_row, input_row, rows: input_row + 1, width: w }
         }
         Style::Line => {
-            let bare = match summary(&paras) {
-                Some(s) => format!(" {} · {s} ", req.title),
-                None => format!(" {} ", req.title),
+            // The lead first, so a title cut short keeps it, unless the
+            // summary already starts with it.
+            let lead = lead(&req.desc).map(|l| l.trim_end_matches(':').to_string());
+            let parts = match (lead, summary(&paras)) {
+                (Some(l), Some(s)) if s.starts_with(&l) => vec![s],
+                (l, s) => l.into_iter().chain(s).collect(),
             };
+            let bare = format!(" {} ", [req.title.clone()].into_iter().chain(parts).collect::<Vec<_>>().join(" · "));
             // Sized with the least the origin gets, not all of it: it may
             // then be cut.
             let line_w = err_w.map_or(0, |w| w + 2) + input_w;
@@ -1258,6 +1273,28 @@ mod tests {
         assert_eq!(layout(&plain, 200).width, width(" Unlock key · User <a@x> ") + 2 + width(" · ") + MIN_ORIGIN);
         let req = Request { style: Style::Box, ..req };
         assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ wo… ");
+
+        // gpg-agent's note on a remote request comes first, whatever the
+        // client quoted, and outlasts it when the title is cut.
+        let remote = Request {
+            desc: "Note: Request from a remote site.\n\nPlease enter the passphrase for\n\"User <a@x>\"".into(),
+            origin: "ssh @ work:1.0".into(),
+            ..full_request()
+        };
+        assert_eq!(layout(&remote, 200).title, " Unlock key · Note: Request from a remote site. · User <a@x> · ssh @ wor… ");
+        assert_eq!(layout(&remote, 60).title, " Unlock key · Note: Request from a remote site.… · ssh @ w… ");
+        // A summary that starts with the lead names it once.
+        let card = Request { desc: "Please unlock the card\n\nNumber: 30 774 964".into(), ..full_request() };
+        assert_eq!(layout(&card, 200).title, " Unlock key · Please unlock the card Number: 30 774 964 ");
+    }
+
+    #[test]
+    fn lead_is_a_paragraph_set_apart() {
+        assert_eq!(lead("Note: remote.\n\nPlease enter\n\"U\"").as_deref(), Some("Note: remote."));
+        assert_eq!(lead("\n  Two\n lines\n \nrest").as_deref(), Some("Two lines"));
+        assert_eq!(lead("Please enter\n\"U\"\n3072-bit RSA key"), None);
+        assert_eq!(lead("Only\n\n"), None);
+        assert_eq!(lead(""), None);
     }
 
     #[test]

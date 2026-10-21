@@ -21,7 +21,8 @@ pit: gpg-agent pinentry for terminals and tmux
     │ Passphrase: [•••·]                                            │
     └───────────────────────────────────────────────────────────────┘
 
-  line, the description summed up in the title:
+  line, the description summed up in the title, after gpg-agent's note
+  when a request is from a remote site:
 
     ┌─ gpg · User <user@example.org> · git commi… ─┐
     │ Passphrase: [••·•]                           │
