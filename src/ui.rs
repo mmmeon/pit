@@ -858,8 +858,10 @@ impl Ui<'_> {
                 Key::Cancel | Key::Hangup if !message => break Choice::Cancel,
                 Key::Cancel | Key::Hangup => break Choice::Ok,
                 Key::Timeout => return Ok(Outcome::Timeout),
-                Key::Text(text) => {
+                Key::Text(mut text) => {
                     let c = String::from_utf8_lossy(&text).chars().next().map(|c| c.to_ascii_lowercase());
+                    // It may be a passphrase typed at the wrong prompt.
+                    text.fill(0);
                     if let Some(b) = buttons.iter().find(|b| b.mnemonic.is_some() && b.mnemonic == c) {
                         break b.choice;
                     }
