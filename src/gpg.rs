@@ -47,7 +47,7 @@ pub fn card_name(desc: &str) -> Option<String> {
         .flatten()
         .filter_map(|e| {
             let grip = e.file_name().to_str()?.strip_suffix(".key")?.to_string();
-            let serial = token(&read_key(&e.path())?.0)?;
+            let serial = read_token(&e.path())?;
             on_card(&serial, &number).then_some(grip)
         })
         .collect();
@@ -57,36 +57,52 @@ pub fn card_name(desc: &str) -> Option<String> {
     grips.iter().find_map(|g| grip_name(g, deadline))
 }
 
-/// The start of a key file, wiped when dropped: it may be a real key, and
-/// not even protected.
-fn read_key(path: &Path) -> Option<Secret> {
+/// The card serial in the key file at `path`, if it's a stub for a key on
+/// a card. Read a little at a time, no further than it takes to tell, and
+/// wiped when done: it may be a real key, and not even protected.
+fn read_token(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
-    let mut buf = Secret::from(vec![0; MAX_KEY_FILE]);
-    let mut n = 0;
-    while n < buf.0.len() {
-        match file.read(&mut buf.0[n..]) {
-            Ok(0) => break,
-            Ok(k) => n += k,
-            Err(_) => return None,
+    let mut buf = Secret::with_capacity(MAX_KEY_FILE);
+    let mut chunk = [0u8; 256];
+    while buf.0.len() < MAX_KEY_FILE {
+        let n = file.read(&mut chunk).ok()?;
+        buf.extend(&chunk[..n]);
+        chunk.fill(0);
+        if let Some(settled) = token(&buf.0, n == 0) {
+            return settled;
         }
-    }
-    buf.0.truncate(n);
-    Some(buf)
-}
-
-/// The card serial number in a key file's `Token:` line, if it's a stub
-/// for a key on a card. Stops at a real key: no need to look at it.
-fn token(key: &[u8]) -> Option<String> {
-    for line in key.split(|&b| b == b'\n') {
-        if let Some(t) = line.strip_prefix(b"Token: ") {
-            let serial = t.split(|&b| b == b' ').next()?;
-            return std::str::from_utf8(serial).ok().map(String::from);
-        }
-        if line.starts_with(b"Key: ") && !line.starts_with(b"Key: (shadowed-private-key") {
-            return None;
+        if n == 0 {
+            break;
         }
     }
     None
+}
+
+/// The card serial number in a key file's `Token:` line, if it's a stub
+/// for a key on a card: Some(Some(serial)). Some(None) once it's settled
+/// that there's none, which a real key's `Key:` line says at once: no need
+/// to look further. None while the `key` read so far hasn't said, unless
+/// it's `all` of the file.
+fn token(key: &[u8], all: bool) -> Option<Option<String>> {
+    const SHADOWED: &[u8] = b"Key: (shadowed-private-key";
+    let mut lines: Vec<&[u8]> = key.split(|&b| b == b'\n').collect();
+    // The last piece is a line only at the end of the file.
+    let tail = if all { None } else { lines.pop() };
+    for line in lines {
+        if let Some(t) = line.strip_prefix(b"Token: ") {
+            let serial = t.split(|&b| b == b' ').next().unwrap_or_default();
+            return Some(std::str::from_utf8(serial).ok().filter(|s| !s.is_empty()).map(String::from));
+        }
+        if line.starts_with(b"Key: ") && !line.starts_with(SHADOWED) {
+            return Some(None);
+        }
+    }
+    // A real key's `Key:` line is long: the start of it is enough.
+    match tail {
+        Some(t) if t.starts_with(b"Key: ") && t.len() >= SHADOWED.len() && !t.starts_with(SHADOWED) => Some(None),
+        _ if all => Some(None),
+        _ => None,
+    }
 }
 
 /// Whether the OpenPGP card with application ID `serial` (D27600012401,
@@ -261,9 +277,37 @@ mod tests {
     fn reads_only_stubs() {
         let stub = "Created: 20241205T193049\nKey: (shadowed-private-key (rsa (n #00D5#)))\n\
                     Token: D2760001240100000006307749640000 OPENPGP.1\n";
-        assert_eq!(token(stub.as_bytes()).as_deref(), Some("D2760001240100000006307749640000"));
-        assert_eq!(token("Key: (protected-private-key (rsa))\nToken: D276 X\n".as_bytes()), None);
-        assert_eq!(token("Key: (private-key (rsa))\n".as_bytes()), None);
+        let serial = Some(Some("D2760001240100000006307749640000".to_string()));
+        assert_eq!(token(stub.as_bytes(), false), serial);
+        assert_eq!(token(stub.as_bytes(), true), serial);
+        assert_eq!(token("Key: (protected-private-key (rsa))\nToken: D276 X\n".as_bytes(), false), Some(None));
+        assert_eq!(token("Key: (private-key (rsa))\n".as_bytes(), true), Some(None));
+        // Cut short: a stub isn't settled until its Token line is whole, a
+        // real key as soon as its Key line has begun.
+        assert_eq!(token(&stub.as_bytes()[..60], false), None);
+        assert_eq!(token("Created: 1\nToken: D276".as_bytes(), false), None);
+        assert_eq!(token("Created: 1\nToken: D276".as_bytes(), true), Some(Some("D276".into())));
+        assert_eq!(token("Created: 1\nKey: (protected-private-key (rsa (n #00".as_bytes(), false), Some(None));
+        assert_eq!(token("Created: 1\nKey: (sh".as_bytes(), false), None);
+        assert_eq!(token("Created: 1\n".as_bytes(), true), Some(None));
+        assert_eq!(token("Token: \n".as_bytes(), false), Some(None));
+    }
+
+    #[test]
+    fn reads_no_more_of_a_key_file_than_it_takes() {
+        let dir = std::env::temp_dir().join(format!("pit-gpg-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("stub.key");
+        fs::write(&stub, "Created: 1\nKey: (shadowed-private-key (rsa (n #00D5#)))\nToken: D2760001240100000006307749640000 OPENPGP.1\n").unwrap();
+        assert_eq!(read_token(&stub).as_deref(), Some("D2760001240100000006307749640000"));
+        let real = dir.join("real.key");
+        fs::write(&real, format!("Created: 1\nKey: (protected-private-key (rsa (n #{}#)))\n", "AB".repeat(100_000))).unwrap();
+        assert_eq!(read_token(&real), None);
+        let big = dir.join("big.key");
+        fs::write(&big, format!("Created: 1\n{}Token: X\n", "Comment: x\n".repeat(10_000))).unwrap();
+        assert_eq!(read_token(&big), None, "stops at MAX_KEY_FILE");
+        assert_eq!(read_token(&dir.join("missing.key")), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
