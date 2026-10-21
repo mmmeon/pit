@@ -98,7 +98,9 @@ terminals
   - same when no tmux client is attached, or the popup can't open
 
 tmux
-  - popup on the most recently active client, sized to fit
+  - popup on the most recently active client, sized to fit. In a shared
+    session that may be someone else's, who then sees what the prompt
+    says: which key, and the command that asked
   - other clients get a status-line note: "pinentry: gpg - prompt open on
     /dev/pts/15"
   - the title names the command and pane that asked, e.g.
