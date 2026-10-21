@@ -2,9 +2,11 @@
 
 use std::env;
 use std::ffi::{CString, OsStr};
+use std::fs;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
@@ -17,8 +19,36 @@ fn check(ret: libc::c_int) -> io::Result<libc::c_int> {
     if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(ret) }
 }
 
-pub fn mkdtemp() -> io::Result<PathBuf> {
-    let template = env::temp_dir().join("pit.XXXXXX");
+/// A directory of our own for what passes between our processes, made
+/// private to us if it isn't there: under XDG_RUNTIME_DIR, which is in
+/// memory and ours alone. Each side must find the same one from its own
+/// environment: gpg-agent's may lack the variable, so systemd's default
+/// stands in. Only without either does it go under the temp directory.
+pub fn runtime_dir() -> io::Result<PathBuf> {
+    let uid = uid();
+    let base = env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|d| d.is_absolute())
+        .or_else(|| Some(PathBuf::from(format!("/run/user/{uid}"))).filter(|d| d.is_dir()));
+    let dir = match base {
+        Some(base) => base.join("pit"),
+        None => env::temp_dir().join(format!("pit-{uid}")),
+    };
+    match fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    // Under /tmp someone else could have made it first.
+    let m = fs::symlink_metadata(&dir)?;
+    if !m.is_dir() || m.uid() != uid || m.mode() & 0o077 != 0 {
+        return Err(io::Error::other(format!("{} isn't a private directory of ours", dir.display())));
+    }
+    Ok(dir)
+}
+
+/// A fresh private directory under `base`.
+pub fn mkdtemp(base: &Path) -> io::Result<PathBuf> {
+    let template = base.join("pit.XXXXXX");
     let mut buf = cstr(&template)?.into_bytes_with_nul();
     if unsafe { libc::mkdtemp(buf.as_mut_ptr().cast()) }.is_null() {
         return Err(io::Error::last_os_error());

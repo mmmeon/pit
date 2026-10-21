@@ -50,7 +50,7 @@ impl<'a> Setup<'a> {
 impl Drop for Setup<'_> {
     fn drop(&mut self) {
         if !thread::panicking() {
-            assert_eq!(self.sb.leftovers(), Vec::<String>::new(), "files left in TMPDIR");
+            assert_eq!(self.sb.leftovers(), Vec::<String>::new(), "files left behind");
         }
     }
 }

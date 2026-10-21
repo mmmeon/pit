@@ -201,9 +201,15 @@ impl Sandbox {
         Sandbox { root, _turn: turn }
     }
 
-    /// TMPDIR for the pinentry, where its fifo directories go.
+    /// TMPDIR for the pinentry.
     pub fn tmp(&self) -> PathBuf {
         self.root.join("tmp")
+    }
+
+    /// The pinentry's own directory under the runtime dir, where its fifo
+    /// directories and sockets go.
+    pub fn run(&self) -> PathBuf {
+        self.root.join("run/pit")
     }
 
     /// Points `cmd` at this sandbox's tmux server, TMPDIR, runtime dir and
@@ -227,9 +233,12 @@ impl Sandbox {
         fs::write(dir.join("config.toml"), toml).unwrap();
     }
 
+    /// Whatever the pinentry left behind in its directories.
     pub fn leftovers(&self) -> Vec<String> {
-        fs::read_dir(self.tmp())
-            .unwrap()
+        [self.tmp(), self.run()]
+            .iter()
+            .filter_map(|d| fs::read_dir(d).ok())
+            .flatten()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect()
     }

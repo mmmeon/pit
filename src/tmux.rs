@@ -125,7 +125,8 @@ fn shell_quote(s: &[u8]) -> String {
 /// Asks in a popup on `client`, running the `hook` command while it's up.
 /// None means the popup couldn't be shown.
 pub fn prompt(client: &Client, req: &Request, lay: &Layout, hook: Option<&str>) -> io::Result<Option<Outcome>> {
-    let dir = sys::mkdtemp()?;
+    // In memory and ours alone: the request names the key and the command.
+    let dir = sys::mkdtemp(&sys::runtime_dir()?)?;
     let outcome = popup(client, req, lay, hook, &dir);
     let _ = fs::remove_dir_all(&dir);
     outcome

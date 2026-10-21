@@ -1,16 +1,14 @@
 //! A prompt with nowhere to go, left waiting for `pit answer` in whichever
 //! terminal the user picks.
 //!
-//! The waiting pinentry listens on `<pid>.sock` in a private directory
-//! under $XDG_RUNTIME_DIR. `pit answer` connects, gets the Request, asks on
+//! The waiting pinentry listens on `<pid>.sock` in our private runtime
+//! directory. `pit answer` connects, gets the Request, asks on
 //! its own terminal and sends back the Outcome line, the same lines a popup
 //! uses. If it goes away without answering, the prompt waits again.
 
-use std::env;
-use std::fs::{self, DirBuilder, File};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process;
@@ -24,31 +22,6 @@ use crate::ui::{self, Outcome, Request, Secret, Style};
 /// being answered elsewhere.
 const BUSY: Duration = Duration::from_secs(1);
 
-/// The directory the sockets go in, made private to us if it isn't there.
-/// Both sides must find the same one from their own environments:
-/// gpg-agent's may lack XDG_RUNTIME_DIR, so systemd's default stands in.
-fn dir() -> io::Result<PathBuf> {
-    let uid = sys::uid();
-    let base = env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|d| d.is_absolute())
-        .or_else(|| Some(PathBuf::from(format!("/run/user/{uid}"))).filter(|d| d.is_dir()));
-    let dir = match base {
-        Some(base) => base.join("pit"),
-        None => env::temp_dir().join(format!("pit-{uid}")),
-    };
-    match DirBuilder::new().mode(0o700).create(&dir) {
-        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
-        _ => {}
-    }
-    // Under /tmp someone else could have made it first.
-    let m = fs::symlink_metadata(&dir)?;
-    if !m.is_dir() || m.uid() != uid || m.mode() & 0o077 != 0 {
-        return Err(io::Error::other(format!("{} isn't a private directory of ours", dir.display())));
-    }
-    Ok(dir)
-}
-
 /// The socket, removed when the prompt is done.
 struct Listening(PathBuf);
 
@@ -60,7 +33,7 @@ impl Drop for Listening {
 
 /// Waits for `pit answer` to ask `req`, up to its timeout.
 pub fn wait(req: &Request, hook: Option<&str>) -> io::Result<Outcome> {
-    let path = dir()?.join(format!("{}.sock", process::id()));
+    let path = sys::runtime_dir()?.join(format!("{}.sock", process::id()));
     let _ = fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
     let _listening = Listening(path);
@@ -105,7 +78,7 @@ fn serve(mut stream: UnixStream, req: &Request, deadline: Option<Instant>) -> io
 
 /// `pit answer`: asks the oldest waiting prompt here, on this terminal.
 pub fn main() -> io::Result<()> {
-    let dir = dir()?;
+    let dir = sys::runtime_dir()?;
     let mut socks: Vec<_> = fs::read_dir(&dir)?
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().ends_with(".sock"))
