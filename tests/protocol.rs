@@ -80,3 +80,20 @@ fn unopenable_tty() {
     assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY), "{reply:?}");
     assert!(reply[0].contains("No pinentry (") && reply[0].contains("No such file"), "{reply:?}");
 }
+
+#[test]
+fn only_a_terminal_is_opened() {
+    let sb = Sandbox::new();
+    // A fifo would block the open without O_NONBLOCK, and a file is never a
+    // terminal: neither is opened, let alone asked on.
+    let fifo = sb.tmp().join("fifo");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let file = sb.tmp().join("file");
+    std::fs::write(&file, "").unwrap();
+    for path in [&fifo, &file, &std::path::PathBuf::from("/dev/null")] {
+        let mut p = Pinentry::spawn(&sb, &["--ttyname", path.to_str().unwrap()]);
+        let reply = p.cmd("GETPIN");
+        assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY), "{reply:?}");
+        assert!(reply[0].contains("isn't a terminal"), "{reply:?}");
+    }
+}

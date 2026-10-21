@@ -4,7 +4,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::process;
 
 use crate::answer;
@@ -219,8 +219,17 @@ impl State {
         // there, not in tmux, even if a tmux client is attached elsewhere.
         // Without making it our controlling terminal, or waiting for a
         // serial line's carrier; blocking again once open, for the prompt.
+        // Only a terminal: opening a fifo or some devices does something
+        // of its own, and anything else is never one.
         let open = |t: &str| {
+            let not_tty = || io::Error::other(format!("{t} isn't a terminal"));
+            if !std::fs::metadata(t)?.file_type().is_char_device() {
+                return Err(not_tty());
+            }
             let f = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(t)?;
+            if unsafe { libc::isatty(f.as_raw_fd()) } != 1 {
+                return Err(not_tty());
+            }
             sys::set_nonblocking(f.as_raw_fd(), false)?;
             Ok::<_, io::Error>(f)
         };
@@ -673,6 +682,9 @@ mod tests {
         assert_eq!(st.default_ok.as_deref(), Some("OK!"));
         assert_eq!(st.default_cancel.as_deref(), Some("Nope"));
         assert_eq!(st.default_prompt.as_deref(), Some("PIN?"));
+        // Who asked, too: without it the prompt can't say, and every reader
+        // of the terminal counts against it.
+        assert_eq!((st.owner, st.proxied, st.requester()), (Some(me), false, Some(me)));
         assert_eq!(st.desc, None);
         assert_eq!(st.prompt, None);
         assert_eq!(st.repeat, None);
