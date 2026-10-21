@@ -520,7 +520,8 @@ fn title(head: &str, origin: &str, guess: bool, w: usize) -> String {
     // The separator, the mark and the trailing space.
     let fixed = width(" · ") + width(mark) + 1;
     let least = MIN_ORIGIN.min(width(origin));
-    if origin.is_empty() || w < fixed + least + 1 {
+    // Room for both means a few columns of the head too, not an ellipsis.
+    if origin.is_empty() || w < fixed + least + width(head).min(4) {
         return format!("{} ", cut(head, w.saturating_sub(1)));
     }
     let origin_w = width(origin).min(w - fixed - 1).min((w - fixed).saturating_sub(width(head)).max(least));
@@ -1227,6 +1228,8 @@ mod tests {
         assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 18), " Unlo… · git com… ");
         // Too little room for both: no dangling separator.
         assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 12), " Unlock ");
+        assert_eq!(title(" gpg", "git commit @ work:2.1", false, 15), " gpg ");
+        assert_eq!(title(" gpg", "git commit @ work:2.1", false, 16), " gpg · git com… ");
         assert_eq!(title(" Unlock key", "", false, 8), " Unloc… ");
         // The line style puts the user ID in the head, and a remote client
         // picks that: however long, the origin still says who asked.
