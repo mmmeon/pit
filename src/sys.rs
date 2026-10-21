@@ -200,10 +200,11 @@ pub fn uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
-pub fn random() -> u32 {
+/// Four random bytes, or None when the kernel gives none: interrupted by a
+/// signal, or no getrandom at all.
+pub fn random() -> Option<u32> {
     let mut n = 0u32;
-    unsafe { libc::getrandom((&raw mut n).cast(), 4, 0) };
-    n
+    (unsafe { libc::getrandom((&raw mut n).cast(), 4, 0) } == 4).then_some(n)
 }
 
 pub fn ignore_interrupts() {

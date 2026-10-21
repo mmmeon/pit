@@ -349,6 +349,19 @@ struct Button {
     choice: Choice,
 }
 
+/// Whether `next` can follow `cur` as the echo marker: four cells, at
+/// least two lit, and visibly different.
+fn marker_after(cur: u32, next: u32) -> bool {
+    next.count_ones() >= 2 && next != cur
+}
+
+/// A marker to follow `cur` without randomness: `cur` rotated, or a fixed
+/// one when that changes nothing.
+fn rotated_marker(cur: u32) -> u32 {
+    let rotated = (cur << 1 | cur >> 3) & 0xf;
+    if marker_after(cur, rotated) { rotated } else { 0b0011 }
+}
+
 fn buttons(req: &Request) -> Vec<Button> {
     let (ok, ok_key) = label(&req.ok);
     let mut v = vec![Button { key: "⏎".into(), label: ok, mnemonic: ok_key, choice: Choice::Ok }];
@@ -801,13 +814,14 @@ impl Ui<'_> {
     }
 
     fn reroll_marker(&mut self) {
-        loop {
-            let m = sys::random() & 0xf;
-            if m.count_ones() >= 2 && m != self.marker {
-                self.marker = m;
-                return;
+        self.marker = loop {
+            match sys::random() {
+                Some(r) if marker_after(self.marker, r & 0xf) => break r & 0xf,
+                Some(_) => continue,
+                // Without randomness the marker still changes on every key.
+                None => break rotated_marker(self.marker),
             }
-        }
+        };
     }
 
     fn pin_loop(&mut self, deadline: Option<Instant>) -> io::Result<Outcome> {
@@ -1050,6 +1064,13 @@ mod tests {
         assert_eq!(label("_A_B"), ("AB".into(), Some('a')));
         assert_eq!(label("trailing_"), ("trailing".into(), None));
         assert_eq!(label("OK"), ("OK".into(), None));
+    }
+
+    #[test]
+    fn marker_changes_without_randomness() {
+        for cur in 0..16 {
+            assert!(marker_after(cur, rotated_marker(cur)), "{cur:#06b}");
+        }
     }
 
     #[test]
