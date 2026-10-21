@@ -194,9 +194,9 @@ fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, d
                 break Ok(Some(Outcome::decode(&line.0)));
             }
             if !ready {
-                // Only once it's really up, and without the origin: other
-                // clients may be other people, and command lines can hold
-                // secrets.
+                // Only once it's really up, and without the origin: anyone
+                // looking at the screen can read a status line, and command
+                // lines can hold secrets.
                 notify_others(client, &req.title);
                 hook = Some(Hook::open(hook_cmd, req, &format!("popup {}", client.tty)));
             }

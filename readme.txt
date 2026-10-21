@@ -101,8 +101,7 @@ terminals
 tmux
   - popup on your most recently active client, sized to fit. Never on a
     read-only client, nor in a shared session on someone else's, who
-    could see the prompt and answer it (tmux 3.3 or later says whose a
-    client is; before that, there's no popup)
+    could see the prompt and answer it. Needs tmux 3.3 or later
   - your other clients get a status-line note: "pinentry: gpg - prompt
     open on /dev/pts/15"
   - the title names the command and pane that asked, e.g.
