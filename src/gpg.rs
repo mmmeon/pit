@@ -96,7 +96,9 @@ fn token(key: &[u8]) -> Option<String> {
 fn on_card(serial: &str, number: &str) -> bool {
     let serial = serial.to_ascii_uppercase();
     let number = number.to_ascii_uppercase();
-    serial.len() == 32
+    // ASCII, so the slices below fall on characters.
+    serial.is_ascii()
+        && serial.len() == 32
         && serial.starts_with("D27600012401")
         && match number.len() {
             7 | 8 => serial[20..28] == format!("{number:0>8}"),
@@ -277,6 +279,8 @@ mod tests {
         assert!(!on_card(sn, "3077496"));
         assert!(!on_card(sn, "077496"));
         assert!(!on_card("D2760001240100000006307749", "30774964"));
+        // 32 bytes, but not all characters: no panic slicing it.
+        assert!(!on_card("D27600012401000é0006307749640000", "30774964"));
     }
 
     #[test]
