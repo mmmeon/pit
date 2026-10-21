@@ -143,9 +143,9 @@ config
   echo: marker changes on every key without giving away the length; dots
   shows one per character; none shows nothing.
 
-  origin: short names the program and its subcommand ("git commit"); full
-  gives the whole command line, which may hold secrets and puts them on
-  screen.
+  origin: short names the program, and its subcommand for those known to
+  have one ("git commit"); full gives the whole command line, which may
+  hold secrets and puts them on screen.
 
   inline: auto asks in place in a pane when the command that asked is in
   its foreground and nothing full-screen shows there; never always uses

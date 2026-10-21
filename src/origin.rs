@@ -292,15 +292,25 @@ fn cmdline(pid: u32, full: bool) -> Option<String> {
     command(&args(pid), full)
 }
 
+/// Programs whose first word is a subcommand worth naming (`git commit`).
+/// For any other, a first argument could be anything, a password included.
+const SUBCOMMANDS: &[&str] = &[
+    "git", "gpg", "gpgsm", "gpg-connect-agent", "pass", "gopass", "sops", "chezmoi", "yadm", "git-crypt", "tomb", "cargo",
+    "docker", "podman", "kubectl", "helm", "aws", "aws-vault", "gcloud", "az", "gh", "glab", "hg", "svn", "npm", "yarn",
+    "pnpm", "pip", "go", "rustup", "nix", "apt", "apt-get", "dnf", "systemctl", "op", "bw", "vault", "keybase", "rclone",
+    "borg", "restic", "duplicity",
+];
+
 /// The command `args` as shown: with `full`, all of it; otherwise only the
-/// program, and the next word if it's a subcommand (`git commit`). The rest
-/// may hold secrets (`mysql -p…`, a URL with a password), and the program
-/// is enough to say what asked.
+/// program, and the next word if it's a subcommand (`git commit`) of a
+/// program known for them. The rest may hold secrets (`mysql -p…`, a URL
+/// with a password), and the program is enough to say what asked.
 fn command(args: &[String], full: bool) -> Option<String> {
     let (argv0, rest) = args.split_first()?;
     let name = argv0.rsplit('/').next().unwrap_or(argv0);
     let sub = |a: &&String| {
-        a.len() <= 20
+        SUBCOMMANDS.contains(&name)
+            && a.len() <= 20
             && a.starts_with(|c: char| c.is_ascii_lowercase())
             && a.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     };
@@ -389,7 +399,10 @@ Num       RefCount Protocol Flags    Type St Inode Path
         assert_eq!(c(&["vault", "login", "s.AbC123"], false).as_deref(), Some("vault login"));
         assert_eq!(c(&["tool", "Hunter2"], false).as_deref(), Some("tool"));
         assert_eq!(c(&["sleep", "999"], false).as_deref(), Some("sleep"));
-        assert_eq!(c(&["x", "a-very-long-word-that-is-no-subcommand"], false).as_deref(), Some("x"));
+        assert_eq!(c(&["git", "a-very-long-word-that-is-no-subcommand"], false).as_deref(), Some("git"));
+        // A word that could be a subcommand, of a program not known for them.
+        assert_eq!(c(&["tool", "hunter2"], false).as_deref(), Some("tool"));
+        assert_eq!(c(&["/usr/bin/pass", "show", "mail"], false).as_deref(), Some("pass show"));
         assert_eq!(c(&[], false), None);
     }
 
