@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::ui::Secret;
+use crate::ui::{self, Secret};
 use crate::{origin, sys};
 
 /// Never hold up the prompt for long just to name the key.
@@ -197,13 +197,14 @@ fn colons(args: &[&str], deadline: Instant) -> Option<Vec<u8>> {
 }
 
 /// The primary user ID from a `--with-colons` listing. There's no field for
-/// it: gpg lists the primary first, and only moves a revoked one down.
+/// it: gpg lists the primary first, and only moves a revoked one down. As
+/// it may be shown, with nothing in it that would do more than show.
 fn user_id(listing: &str) -> Option<String> {
     listing
         .lines()
         .map(|l| l.split(':').collect::<Vec<_>>())
         .find(|f| f[0] == "uid" && f.get(1) != Some(&"r"))
-        .and_then(|f| f.get(9).map(|uid| unescape(uid)))
+        .and_then(|f| f.get(9).map(|uid| ui::clean(&unescape(uid), false)))
         .filter(|uid| !uid.is_empty())
 }
 
@@ -258,6 +259,8 @@ mod tests {
         assert_eq!(user_id(listing).as_deref(), Some("User: Work <a@x>"));
         assert_eq!(user_id("pub:u:4096:1:401FEB2D1CDE5779:1:::u:::cESCA:\n"), None);
         assert_eq!(user_id(""), None);
+        // A user ID goes into the prompt's text: nothing in it may draw.
+        assert_eq!(user_id("uid:u::::1::C0CE::Eve\\x1b[2K\\x07 <e@x>::::::::::0:\n").as_deref(), Some("Eve[2K <e@x>"));
     }
 
     #[test]
