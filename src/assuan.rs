@@ -434,6 +434,8 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
         "SETTIMEOUT" => st.timeout = arg.trim().parse().unwrap_or(0),
         "RESET" => {
             *st = State {
+                owner: st.owner,
+                proxied: st.proxied,
                 ttyname: st.ttyname.take(),
                 ttytype: st.ttytype.take(),
                 default_ok: st.default_ok.take(),
@@ -659,6 +661,8 @@ mod tests {
         ok(&mut st, "OPTION default-ok=OK!");
         ok(&mut st, "OPTION default-cancel=Nope");
         ok(&mut st, "OPTION default-prompt=PIN?");
+        let me = std::process::id();
+        ok(&mut st, &format!("OPTION owner={me}/{}", sys::uid()));
         ok(&mut st, "SETDESC desc");
         ok(&mut st, "SETPROMPT prompt");
         ok(&mut st, "SETREPEAT");
