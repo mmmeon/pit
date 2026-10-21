@@ -133,7 +133,7 @@ pub fn prompt(client: &Client, req: &Request, lay: &Layout, hook: Option<&str>) 
 }
 
 fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, dir: &Path) -> io::Result<Option<Outcome>> {
-    fs::write(dir.join("req"), req.encode())?;
+    OpenOptions::new().write(true).create_new(true).mode(0o600).open(dir.join("req"))?.write_all(req.encode().as_bytes())?;
     sys::mkfifo(&dir.join("resp"))?;
     sys::mkfifo(&dir.join("ctl"))?;
     // Read-write so the opens don't block. The popup gives up once ctl has
