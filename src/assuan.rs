@@ -65,9 +65,10 @@ pub fn unescape(s: impl AsRef<[u8]>) -> Vec<u8> {
 /// An argument's text, as it may be shown. The agent's clients have a say
 /// in it (a remote one sets the key description itself, an ssh client the
 /// key's comment), so it gets nothing that could redraw the prompt or make
-/// the terminal answer.
-fn text(arg: &str) -> String {
-    ui::clean(&String::from_utf8_lossy(&unescape(arg)), true)
+/// the terminal answer. Newlines stay only with `lines`: the description
+/// has them; the rest is drawn on one row.
+fn text(arg: &str, lines: bool) -> String {
+    ui::clean(&String::from_utf8_lossy(&unescape(arg)), lines)
 }
 
 /// What gpg-agent has told us so far.
@@ -106,7 +107,7 @@ impl State {
     fn option(&mut self, arg: &str) {
         let arg = arg.trim();
         let (name, value) = arg.split_once(['=', ' ']).unwrap_or((arg, ""));
-        let value = Some(text(value.trim_start_matches([' ', '='])));
+        let value = Some(text(value.trim_start_matches([' ', '=']), false));
         let name = name.to_ascii_lowercase();
         if !name.starts_with("tty") {
             self.options.push(arg.to_string());
@@ -417,17 +418,17 @@ pub fn serve(args: &[String]) -> io::Result<()> {
 
 /// Runs one command, writing any status and data lines to `out`.
 fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Result<Result<(), Failure>> {
-    let set = |v: &mut Option<String>| *v = Some(text(arg));
+    let set = |v: &mut Option<String>| *v = Some(text(arg, false));
     match cmd {
         "OPTION" => st.option(arg),
-        "SETDESC" => set(&mut st.desc),
+        "SETDESC" => st.desc = Some(text(arg, true)),
         "SETPROMPT" => set(&mut st.prompt),
         "SETERROR" => set(&mut st.error),
         "SETTITLE" => set(&mut st.title),
         "SETOK" => set(&mut st.ok),
         "SETCANCEL" => set(&mut st.cancel),
         "SETNOTOK" => set(&mut st.notok),
-        "SETREPEAT" => st.repeat = Some(Some(text(arg)).filter(|s| !s.is_empty()).unwrap_or("Repeat:".into())),
+        "SETREPEAT" => st.repeat = Some(Some(text(arg, false)).filter(|s| !s.is_empty()).unwrap_or("Repeat:".into())),
         "SETREPEATERROR" => set(&mut st.repeat_error),
         "SETKEYINFO" => st.keyinfo = Some(arg.trim().to_string()).filter(|k| k != "--clear"),
         "SETTIMEOUT" => st.timeout = arg.trim().parse().unwrap_or(0),
@@ -629,9 +630,12 @@ mod tests {
         let mut st = State::default();
         ok(&mut st, "SETDESC Note: remote.%0A%1B[2K%1B[1Gspoofed%09x%C2%9B2J%E2%80%AEy");
         assert_eq!(st.desc.as_deref(), Some("Note: remote.\n[2K[1Gspoofedx2Jy"));
-        ok(&mut st, "SETPROMPT PIN%07:");
+        // Drawn on one row: no newlines but in the description.
+        ok(&mut st, "SETPROMPT PIN%07:%0A");
         assert_eq!(st.prompt.as_deref(), Some("PIN:"));
-        ok(&mut st, "OPTION default-ok=_O%1BK");
+        ok(&mut st, "SETTITLE Unlock%0Akey");
+        assert_eq!(st.title.as_deref(), Some("Unlockkey"));
+        ok(&mut st, "OPTION default-ok=_O%1BK%0A");
         assert_eq!(st.default_ok.as_deref(), Some("_OK"));
     }
 
