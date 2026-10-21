@@ -130,6 +130,25 @@ fn control_characters_in_the_text_do_not_reach_the_terminal() {
 }
 
 #[test]
+fn padding_in_the_text_does_not_scroll_the_note_away() {
+    // Within gpg-agent's line limit a remote client can pad the description
+    // to fill the screen: the note that says it's remote must stay on it.
+    let (_sb, pty, mut p) = setup();
+    let pad: String = (1..=22).map(|i| format!("%0APadding line number {i:02} of the fake text.")).collect();
+    p.setup(&[&format!("SETDESC Note: Request from a remote site.{pad}")]);
+    p.start("GETPIN");
+    let screen = pty.wait_text("PIN:");
+    assert_eq!(pty.row(0), "$ gpg --sign file");
+    assert!(pty.row(1).contains("Note: Request from a remote site."), "{}", screen.contents());
+    assert!(input_row(&pty, "PIN:") < 16, "{}", screen.contents());
+    assert!(screen.contents().contains('…'), "{}", screen.contents());
+    pty.send("x\r");
+    assert_eq!(p.finish(), ["D x", "OK"]);
+    pty.wait_gone("PIN:");
+    assert_eq!(pty.text(), "$ gpg --sign file");
+}
+
+#[test]
 fn lone_escape_and_ctrl_c_cancel() {
     for key in [ESC, "\x03"] {
         let (_sb, pty, mut p) = setup();

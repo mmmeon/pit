@@ -439,6 +439,22 @@ pub struct Layout {
     pub width: usize,
 }
 
+/// Most rows of description shown. gpg's longest runs to five or so; past
+/// that it's padding, which mustn't push the first rows (gpg-agent's note
+/// on a request from a remote site) off a short terminal, or make the popup
+/// too tall for tmux to open.
+const MAX_DESC_ROWS: usize = 12;
+
+/// The first `MAX_DESC_ROWS` of `desc`, the last cut short to show it.
+fn capped(mut desc: Vec<String>, w: usize) -> Vec<String> {
+    if desc.len() > MAX_DESC_ROWS {
+        desc.truncate(MAX_DESC_ROWS);
+        let last = desc.last_mut().unwrap();
+        *last = format!("{}…", split_at_width(last, w.saturating_sub(1)).0);
+    }
+    desc
+}
+
 pub fn layout(req: &Request, max: usize) -> Layout {
     let max = max.max(10);
     let paras: Vec<&str> = req.desc.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
@@ -453,7 +469,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
         Style::Bar => {
             let parts = phrases(&paras);
             let parts = parts.iter().map(|p| p.trim_end_matches([':', ',']));
-            let desc = wrap_parts(parts, " · ", max);
+            let desc = capped(wrap_parts(parts, " · ", max), max);
             let error_row = err_w.map(|_| desc.len());
             let input_row = desc.len() + usize::from(err_w.is_some());
             let title = title(&head, &req.origin, req.guess, max);
@@ -462,7 +478,7 @@ pub fn layout(req: &Request, max: usize) -> Layout {
         Style::Box => {
             let longest = paras.iter().map(|p| width(p)).max().unwrap_or(0);
             let w = longest.max(input_w).max(err_w.unwrap_or(0)).clamp(20.min(max), max.min(76));
-            let desc = wrap(&paras.join("\n"), w);
+            let desc = capped(wrap(&paras.join("\n"), w), w);
             let top = desc.len() + usize::from(!desc.is_empty());
             let error_row = err_w.map(|_| top);
             let input_row = top + usize::from(err_w.is_some());
@@ -1157,6 +1173,23 @@ mod tests {
         let empty = Request { desc: String::new(), ..req };
         let lay = layout(&empty, 200);
         assert_eq!((lay.desc.len(), lay.input_row, lay.rows), (0, 0, 1));
+    }
+
+    #[test]
+    fn description_rows_are_capped() {
+        // A remote client's padding mustn't scroll the note that says so off
+        // the screen, nor make the popup too tall to open.
+        let padded: String = (1..=40).map(|i| format!("Note: Request from a remote site.\nPadding line number {i:02} of the fake text.")).collect::<Vec<_>>().join("\n");
+        for style in [Style::Bar, Style::Box] {
+            let req = Request { kind: Kind::Pin, style, desc: padded.clone(), error: String::new(), repeat: None, ..full_request() };
+            let lay = layout(&req, 60);
+            assert_eq!(lay.desc.len(), MAX_DESC_ROWS, "{style:?}");
+            assert!(lay.desc[0].starts_with("Note: Request from a remote site."), "{style:?}: {:?}", lay.desc[0]);
+            assert!(lay.desc.last().unwrap().ends_with('…'), "{style:?}");
+            assert!(lay.desc.iter().all(|l| width(l) <= lay.width), "{style:?}");
+            // Box keeps a blank row before the input.
+            assert!(lay.rows <= MAX_DESC_ROWS + 2, "{style:?}: {} rows", lay.rows);
+        }
     }
 
     #[test]
