@@ -586,6 +586,8 @@ struct Ui<'a> {
     /// every WATCH_EVERY while waiting for keys.
     watch: Option<&'a dyn Fn() -> bool>,
     watched: Instant,
+    /// It has: the prompt is over, whatever is being parsed.
+    taken: bool,
     req: &'a Request,
     lay: Layout,
     inline: bool,
@@ -616,6 +618,7 @@ pub fn run(tty: &File, req: &Request, ctl: Option<&File>, inline: bool, watch: O
         interrupts: interrupts.as_ref(),
         watch,
         watched: Instant::now(),
+        taken: false,
         req,
         lay: layout(req, req.width),
         inline,
@@ -764,6 +767,7 @@ impl Ui<'_> {
             // Before reading: what's typed and not yet read is flushed with
             // the terminal's modes, not left to the other reader.
             if taken() {
+                self.taken = true;
                 return Ok(Some(Key::Taken));
             }
         }
@@ -798,6 +802,11 @@ impl Ui<'_> {
     }
 
     fn key(&mut self, deadline: Option<Instant>) -> io::Result<Key> {
+        // Found while waiting for the rest of a sequence, which doesn't
+        // pass keys on.
+        if self.taken {
+            return Ok(Key::Taken);
+        }
         while self.pending.0.is_empty() {
             let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
             if left == Some(Duration::ZERO) {
