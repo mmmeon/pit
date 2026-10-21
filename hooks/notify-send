@@ -5,13 +5,15 @@
 #
 #   hook = '~/path/to/notify-send'
 
-dir=${XDG_RUNTIME_DIR:-/tmp}/pit
+# Private to us, unlike /tmp, where another user could plant the path.
+# Without it there's no session bus for notify-send either.
+dir=${XDG_RUNTIME_DIR:?}/pit
 # one id file per prompt location, so overlapping prompts don't clash
 id_file=$dir/notify-$(printf '%s' "$PIT_WHERE" | tr -c 'A-Za-z0-9' _)
 
 case $PIT_EVENT in
 open)
-	mkdir -p "$dir" || exit
+	mkdir -p -m 700 "$dir" || exit
 	notify-send -p -a pit -i dialog-password -u critical \
 		"gpg wants a passphrase" "$PIT_TITLE" >"$id_file"
 	;;
