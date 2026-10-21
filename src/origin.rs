@@ -307,7 +307,13 @@ const SUBCOMMANDS: &[&str] = &[
 /// with a password), and the program is enough to say what asked.
 fn command(args: &[String], full: bool) -> Option<String> {
     let (argv0, rest) = args.split_first()?;
-    let name = argv0.rsplit('/').next().unwrap_or(argv0);
+    // A daemon may retitle itself ("sshd: user@pts/3"): only its first word
+    // is a path, and what follows (that it's a login session from
+    // elsewhere) is worth keeping.
+    let (prog, title) = argv0.split_once(char::is_whitespace).unwrap_or((argv0, ""));
+    let prog = prog.rsplit('/').next().unwrap_or(prog);
+    let name = if title.is_empty() { prog.to_string() } else { format!("{prog} {title}") };
+    let name = name.as_str();
     let sub = |a: &&String| {
         SUBCOMMANDS.contains(&name)
             && a.len() <= 20
@@ -404,6 +410,11 @@ Num       RefCount Protocol Flags    Type St Inode Path
         assert_eq!(c(&["tool", "hunter2"], false).as_deref(), Some("tool"));
         assert_eq!(c(&["/usr/bin/pass", "show", "mail"], false).as_deref(), Some("pass show"));
         assert_eq!(c(&[], false), None);
+        // The requester behind a forwarded agent socket is the ssh session,
+        // which retitles itself: the tell-tale that the request is from
+        // elsewhere, kept whole.
+        assert_eq!(c(&["sshd: user@pts/3"], false).as_deref(), Some("sshd: user@pts/3"));
+        assert_eq!(c(&["/usr/lib/ssh/sshd-session: user@notty"], false).as_deref(), Some("sshd-session: user@notty"));
     }
 
     #[test]
