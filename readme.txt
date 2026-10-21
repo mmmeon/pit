@@ -23,9 +23,9 @@ pit: gpg-agent pinentry for terminals and tmux
 
   line, the description summed up in the title:
 
-    ┌─ gpg · User <user@example.org> ───┐
-    │ Passphrase: [••·•]                │
-    └───────────────────────────────────┘
+    ┌─ gpg · User <user@example.org> · git commi… ─┐
+    │ Passphrase: [••·•]                           │
+    └──────────────────────────────────────────────┘
 
   wrong passphrase:
 

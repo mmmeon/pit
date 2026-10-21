@@ -490,9 +490,11 @@ pub fn layout(req: &Request, max: usize) -> Layout {
                 Some(s) => format!(" {} · {s} ", req.title),
                 None => format!(" {} ", req.title),
             };
-            // Sized without the origin, which may then be cut.
+            // Sized with the least the origin gets, not all of it: it may
+            // then be cut.
             let line_w = err_w.map_or(0, |w| w + 2) + input_w;
-            let w = line_w.max(width(&bare) + 2).clamp(30.min(max), max);
+            let origin_w = if req.origin.is_empty() { 0 } else { width(" · ") + MIN_ORIGIN };
+            let w = line_w.max(width(&bare) + origin_w + 2).clamp(30.min(max), max);
             let title = title(bare.trim_end(), &req.origin, req.guess, w);
             Layout { title, desc: Vec::new(), error_row: None, input_row: 0, rows: 1, width: w }
         }
@@ -503,8 +505,11 @@ pub fn layout(req: &Request, max: usize) -> Layout {
 const MIN_ORIGIN: usize = 8;
 
 /// The border title in `w` columns: `head`, then the origin, marked if it's
-/// a `guess`. tmux would cut it mid-separator, so the origin is cut here,
-/// keeping the mark, or left out if too little of it would show.
+/// a `guess`. tmux would cut it mid-separator, so the cutting is done here,
+/// keeping the mark. The origin says who asked, and a long head mustn't
+/// crowd it out (in the line style the head carries the key's user ID,
+/// which a remote client picks): it keeps at least MIN_ORIGIN columns, at
+/// the head's expense, whenever there's room for both.
 fn title(head: &str, origin: &str, guess: bool, w: usize) -> String {
     let cut = |s: &str, w| render(&[("", s.to_string())], w);
     let mark = if guess { " ?" } else { "" };
@@ -512,11 +517,14 @@ fn title(head: &str, origin: &str, guess: bool, w: usize) -> String {
     if width(&full) <= w {
         return full;
     }
-    let room = w.saturating_sub(width(head) + width(" ·  ") + width(mark));
-    if !origin.is_empty() && room >= MIN_ORIGIN {
-        return format!("{head} · {}{mark} ", cut(origin, room));
+    // The separator, the mark and the trailing space.
+    let fixed = width(" · ") + width(mark) + 1;
+    let least = MIN_ORIGIN.min(width(origin));
+    if origin.is_empty() || w < fixed + least + 1 {
+        return format!("{} ", cut(head, w.saturating_sub(1)));
     }
-    format!("{} ", cut(head, w.saturating_sub(1)))
+    let origin_w = width(origin).min(w - fixed - 1).min((w - fixed).saturating_sub(width(head)).max(least));
+    format!("{} · {}{mark} ", cut(head, w - fixed - origin_w), cut(origin, origin_w))
 }
 
 /// Renders styled segments, cut to `w` columns with an ellipsis.
@@ -1203,9 +1211,10 @@ mod tests {
         assert_eq!(layout(&req, 12).width, 12);
 
         let req = Request { origin: "git commit @ work:2.1".into(), ..req };
-        // The popup isn't widened for the origin, so it's cut to fit.
+        // The popup is widened for the least of the origin, which is cut to fit.
         assert_eq!(layout(&req, 200).title, " Unlock key · User <a@x> · git commit @ wor… ");
-        assert_eq!(layout(&req, 200).width, layout(&Request { origin: String::new(), ..req.clone() }, 200).width);
+        let plain = Request { error: String::new(), repeat: None, ..req.clone() };
+        assert_eq!(layout(&plain, 200).width, width(" Unlock key · User <a@x> ") + 2 + width(" · ") + MIN_ORIGIN);
         let req = Request { style: Style::Box, ..req };
         assert_eq!(layout(&req, 200).title, " Unlock key · git commit @ wo… ");
     }
@@ -1214,9 +1223,17 @@ mod tests {
     fn title_fits_its_border() {
         assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 40), " Unlock · git commit @ work:2.1 ");
         assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 22), " Unlock · git commit… ");
-        // Too little of the origin would show: no dangling separator.
-        assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 18), " Unlock ");
+        // The origin keeps its least width at the head's expense.
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 18), " Unlo… · git com… ");
+        // Too little room for both: no dangling separator.
+        assert_eq!(title(" Unlock", "git commit @ work:2.1", false, 12), " Unlock ");
         assert_eq!(title(" Unlock key", "", false, 8), " Unloc… ");
+        // The line style puts the user ID in the head, and a remote client
+        // picks that: however long, the origin still says who asked.
+        let id = format!(" gpg · {}", "A user ID as long as the whole line <someone@example.org>");
+        assert_eq!(title(&id, "ssh @ work:1.0", false, 60), format!("{} · ssh @ w… ", render(&[("", id.clone())], 48)));
+        let req = Request { kind: Kind::Pin, style: Style::Line, desc: format!("Note: remote.\n\"{}\"", &id[7..]), origin: "ssh @ work:1.0".into(), ..full_request() };
+        assert!(layout(&req, 60).title.ends_with(" · ssh @ w… "), "{:?}", layout(&req, 60).title);
         // A guess stays marked however much of it is cut.
         assert_eq!(title(" Unlock", "git commit @ work:2.1", true, 40), " Unlock · git commit @ work:2.1 ? ");
         assert_eq!(title(" Unlock", "git commit @ work:2.1", true, 24), " Unlock · git commit… ? ");
