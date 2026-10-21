@@ -228,10 +228,19 @@ fn ppid(pid: u32) -> Option<u32> {
 /// Field `n` of /proc/<pid>/stat, counting from the one after comm: 0 is
 /// state, 1 ppid, 2 pgrp, 4 tty_nr, 5 tpgid.
 fn stat(pid: u32, n: usize) -> Option<i64> {
+    stats(pid, [n]).map(|[v]| v)
+}
+
+/// Fields `ns` of /proc/<pid>/stat, from one read of it.
+fn stats<const N: usize>(pid: u32, ns: [usize; N]) -> Option<[i64; N]> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // comm is in parens and may hold spaces; the fields after it don't.
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(n)?.parse().ok()
+    let fields: Vec<&str> = stat[stat.rfind(')')? + 1..].split_whitespace().collect();
+    let mut out = [0; N];
+    for (o, n) in out.iter_mut().zip(ns) {
+        *o = fields.get(n)?.parse().ok()?;
+    }
+    Some(out)
 }
 
 /// Whether `pid` runs on the terminal `tty` and is in its foreground: the
@@ -254,20 +263,25 @@ pub fn in_foreground(pid: u32, tty: &str) -> bool {
 /// than to give away some of the passphrase.
 pub fn other_reader(dev: u64, owner: Option<u32>) -> bool {
     let Ok(procs) = fs::read_dir("/proc") else { return true };
-    let procs: Vec<u32> = procs.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
+    // Each process's pgrp, tty and tpgid, from one read apiece: this runs
+    // every so often for as long as a prompt is open.
+    let procs: Vec<(u32, [i64; 3])> = procs
+        .flatten()
+        .filter_map(|e| {
+            let p = e.file_name().to_str()?.parse().ok()?;
+            Some((p, stats(p, [2, 4, 5])?))
+        })
+        .collect();
     // Anything the terminal controls knows its foreground job.
-    let Some(fg) = procs
-        .iter()
-        .filter(|&&p| stat(p, 4).is_some_and(|t| t as u64 == dev))
-        .find_map(|&p| stat(p, 5).filter(|&g| g > 0))
-    else {
+    let Some(fg) = procs.iter().find_map(|&(_, [_, tty, tpgid])| (tty as u64 == dev && tpgid > 0).then_some(tpgid)) else {
         return false;
     };
+    let in_fg = |p: u32| procs.iter().any(|&(q, [pgrp, ..])| q == p && pgrp == fg);
     let waiting = match owner {
-        Some(owner) if stat(owner, 2) == Some(fg) => ancestors(owner),
+        Some(owner) if in_fg(owner) => ancestors(owner),
         _ => Vec::new(),
     };
-    procs.into_iter().filter(|p| !waiting.contains(p) && stat(*p, 2) == Some(fg)).any(|p| reads(p, dev))
+    procs.iter().filter(|(p, [pgrp, ..])| !waiting.contains(p) && *pgrp == fg).any(|&(p, _)| reads(p, dev))
 }
 
 /// Whether `p` has the terminal `dev` to read from: as its input, or opened
@@ -458,6 +472,16 @@ Num       RefCount Protocol Flags    Type St Inode Path
         assert!(readable(me, fd(&rw)));
         // Nothing to go on: taken for a reader.
         assert!(readable(me, 9999));
+    }
+
+    #[test]
+    fn stat_fields_come_from_one_read() {
+        let me = std::process::id();
+        let parent = std::os::unix::process::parent_id();
+        assert_eq!(stats(me, [1, 1]), Some([i64::from(parent); 2]));
+        assert_eq!(stat(me, 1), Some(i64::from(parent)));
+        assert_eq!(stats(me, [1, 9999]), None);
+        assert_eq!(stats(u32::MAX, [1]), None);
     }
 
     #[test]
