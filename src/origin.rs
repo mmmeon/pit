@@ -252,9 +252,9 @@ pub fn in_foreground(pid: u32, tty: &str) -> bool {
 /// waiting on it. One we may not look at (sudo) could be reading. One that
 /// opens /dev/tty itself isn't seen, but those (pagers, editors) mostly put
 /// it in raw mode, which the caller checks. Without an owner, the requester
-/// can't be told apart from anyone else, so this can't tell.
+/// can't be told apart from anyone else, so anything reading counts: better
+/// not to ask than to give away some of the passphrase.
 pub fn other_reader(dev: u64, owner: Option<u32>) -> bool {
-    let Some(owner) = owner else { return false };
     let Ok(procs) = fs::read_dir("/proc") else { return true };
     let procs: Vec<u32> = procs.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
     // Anything the terminal controls knows its foreground job.
@@ -265,7 +265,10 @@ pub fn other_reader(dev: u64, owner: Option<u32>) -> bool {
     else {
         return false;
     };
-    let waiting = if stat(owner, 2) == Some(fg) { ancestors(owner) } else { Vec::new() };
+    let waiting = match owner {
+        Some(owner) if stat(owner, 2) == Some(fg) => ancestors(owner),
+        _ => Vec::new(),
+    };
     procs
         .into_iter()
         .filter(|p| !waiting.contains(p) && stat(*p, 2) == Some(fg))

@@ -328,6 +328,19 @@ fn another_reader_in_the_foreground_is_not_asked() {
     let _ = cat.wait();
 }
 
+#[test]
+fn without_an_owner_anything_in_the_foreground_is_a_reader() {
+    // An agent that doesn't say who asked: sleep could be gpg, waiting on
+    // us, or another command that would take some of the keys.
+    let (_sb, pty, mut p) = setup();
+    let _sleep = Killed(pty.command("sleep").arg("999").spawn().unwrap());
+    p.start("GETPIN");
+    let reply = p.finish();
+    assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY));
+    assert!(reply[0].contains("gpg-agent didn't say"), "{reply:?}");
+    assert!(!pty.text().contains("PIN:"));
+}
+
 fn ask_through(p: &mut Pinentry, proxy: &Proxy) -> Vec<String> {
     let uid = unsafe { libc::getuid() };
     p.setup(&[&format!("OPTION owner={}/{uid}", proxy.pid)]);

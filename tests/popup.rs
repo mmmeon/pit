@@ -233,7 +233,8 @@ fn falls_back_to_pane_when_popup_cannot_open() {
     let client = tmux.attach(30, 100);
     let mut busy = tmux.busy_popup(&client);
     client.pty.wait_text("busy");
-    let pane = tmux.pane_tty();
+    // With no owner to tell apart, the pane must have nothing reading it.
+    let pane = tmux.run(&["new-window", "-P", "-F", "#{pane_tty}", "exec sleep 999 </dev/null"]).trim().to_string();
     let mut p = Pinentry::spawn(&sb, &["--ttyname", &pane]);
     p.start("GETPIN");
     wait_until("prompt in pane", || tmux.capture().contains("PIN:").then_some(()), || tmux.capture());

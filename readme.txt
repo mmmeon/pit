@@ -180,8 +180,10 @@ config
   could take some of the passphrase. tmux is used when available,
   otherwise the GUI or a pending prompt, if set, otherwise it fails.
 - nor is a terminal where another program in the foreground reads it
-  (`cat | gpg -d`), when gpg-agent says who asked. Not caught: one that
-  opens /dev/tty itself without raw mode, which is rare.
+  (`cat | gpg -d`). When gpg-agent doesn't say who asked (before 2.2.x's
+  OPTION owner), anything reading there counts, the command itself
+  included. Not caught: one that opens /dev/tty itself without raw mode,
+  which is rare.
 - behind a proxy in front of gpg-agent (yubikey-touch-detector), who asked
   is the proxy's client. If that isn't clear, the title names only a pane,
   marked "?" (e.g. "work:2.1 ?"), and a terminal is only asked if nothing

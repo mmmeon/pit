@@ -222,6 +222,7 @@ impl State {
         // A proxy whose client isn't clear still counts here: it isn't in
         // the terminal's foreground, so whatever is reading there is taken
         // for another reader, and giving away keys is the worse mistake.
+        // With no owner at all (an old agent), so is everything.
         let asker = owner.or(self.owner);
         let free = |t: &File| {
             sys::line_mode(t.as_raw_fd()) && t.metadata().is_ok_and(|m| !origin::other_reader(m.rdev(), asker))
@@ -276,6 +277,8 @@ impl State {
                     let why = "the terminal is in use by a full-screen program or another command";
                     break 'tty Err(if self.proxied && owner.is_none() {
                         format!("{why}, which can't be told apart from who asked through the proxy in front of gpg-agent")
+                    } else if asker.is_none() {
+                        format!("{why}, which can't be told apart from who asked, as gpg-agent didn't say")
                     } else {
                         why.into()
                     });
