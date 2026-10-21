@@ -176,6 +176,9 @@ config
       notify-send "gpg is waiting" "run pit answer"
     '''
 
+  hook and [gui] pinentry name programs to run as you, so they're taken
+  only from a config file that's yours and that no one else can write.
+
 *awkward scenarios
 
 - a terminal in raw mode (full screen, or reading keys) is never asked: it

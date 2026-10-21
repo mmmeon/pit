@@ -329,6 +329,24 @@ fn another_reader_in_the_foreground_is_not_asked() {
 }
 
 #[test]
+fn hook_is_ignored_from_a_config_others_can_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let (sb, pty, mut p) = setup();
+    let log = sb.tmp().join("hook.log");
+    sb.config(&format!("echo = \"dots\"\nhook = 'echo ran >> {}'\n", log.display()));
+    let config = sb.root.join("config/pit/config.toml");
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
+    p.start("GETPIN");
+    pty.wait_text("PIN:");
+    pty.send("ab");
+    pty.wait_text("••");
+    pty.send("\r");
+    assert_eq!(p.finish(), ["D ab", "OK"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!log.exists(), "the hook ran");
+}
+
+#[test]
 fn without_an_owner_anything_in_the_foreground_is_a_reader() {
     // An agent that doesn't say who asked: sleep could be gpg, waiting on
     // us, or another command that would take some of the keys.

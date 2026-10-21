@@ -18,9 +18,11 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+use crate::sys;
 use crate::ui::{Echo, Request, Style};
 
 pub struct Config {
@@ -61,8 +63,21 @@ impl Config {
             .map(PathBuf::from)
             .filter(|d| d.is_absolute())
             .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
-        let text = dir.and_then(|d| fs::read_to_string(d.join("pit/config.toml")).ok());
-        Config::parse(&text.unwrap_or_default())
+        dir.map_or_else(Config::default, |d| Config::read(&d.join("pit/config.toml")))
+    }
+
+    /// The settings in the file at `path`, if there is one. `hook` and
+    /// `gui.pinentry` name programs to run as us, so they're taken only
+    /// from a file that's ours and that no one else can write.
+    fn read(path: &Path) -> Config {
+        let Ok(text) = fs::read_to_string(path) else { return Config::default() };
+        let mut c = Config::parse(&text);
+        let ours = fs::metadata(path).is_ok_and(|m| m.uid() == sys::uid() && m.mode() & 0o022 == 0);
+        if !ours {
+            c.hook = None;
+            c.gui = None;
+        }
+        c
     }
 
     fn parse(text: &str) -> Config {
@@ -315,5 +330,23 @@ mod tests {
     #[test]
     fn blank_hook_is_no_hook() {
         assert_eq!(Config::parse("hook = '  '").hook, None);
+    }
+
+    #[test]
+    fn programs_come_only_from_a_file_no_one_else_can_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = env::temp_dir().join(format!("pit-config-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "echo = \"dots\"\nhook = 'notify-send hi'\n[gui]\npinentry = \"pinentry-qt\"\n").unwrap();
+        for (mode, kept) in [(0o644, true), (0o600, true), (0o664, false), (0o646, false), (0o666, false)] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            let c = Config::read(&path);
+            assert_eq!(c.echo, Echo::Dots, "{mode:o}");
+            assert_eq!(c.hook.is_some(), kept, "{mode:o}");
+            assert_eq!(c.gui.is_some(), kept, "{mode:o}");
+        }
+        assert_eq!(Config::read(&dir.join("missing.toml")).echo, Echo::Marker);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
