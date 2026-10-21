@@ -210,6 +210,25 @@ fn opens_on_most_recently_active_client() {
 }
 
 #[test]
+fn never_opens_on_a_read_only_client() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let tmux = Tmux::start(&sb);
+    let a = tmux.attach(30, 100);
+    // Activity is tracked in whole seconds.
+    thread::sleep(Duration::from_millis(1100));
+    let b = tmux.attach(30, 100);
+    // The most recently active, but it can't answer.
+    tmux.run(&["switch-client", "-c", b.pty.path(), "-r"]);
+    let mut p = Pinentry::spawn(&sb, &[]);
+    p.start("GETPIN");
+    a.pty.wait_text("PIN:");
+    assert!(!b.pty.text().contains("PIN:"));
+    a.pty.send("ok\r");
+    assert_eq!(p.finish(), ["D ok", "OK"]);
+}
+
+#[test]
 fn outside_terminal_wins_over_attached_client() {
     require_tmux!();
     let sb = Sandbox::new();

@@ -54,18 +54,27 @@ pub fn find_client() -> Option<Client> {
     clients().into_iter().max_by_key(|(activity, _)| *activity).map(|(_, c)| c)
 }
 
-/// All attached clients, with their last activity time.
+/// The attached clients that are ours to ask on, with their last activity
+/// time.
 fn clients() -> Vec<(u64, Client)> {
-    let Some(out) = tmux(&["list-clients", "-F", "#{client_activity}\t#{client_tty}\t#{client_width}"]) else {
-        return Vec::new();
-    };
+    let format = "#{client_activity}\t#{client_tty}\t#{client_width}\t#{client_uid}\t#{client_readonly}";
+    tmux(&["list-clients", "-F", format]).map_or_else(Vec::new, |out| our_clients(&out, sys::uid()))
+}
+
+/// The clients in a `list-clients` listing that are `uid`'s and can type.
+/// In a shared session another user's client could see the prompt and
+/// answer it, a confirmation included; a read-only one can't answer at all.
+/// Without a uid (tmux before 3.3), whose it is can't be told: none is.
+fn our_clients(out: &str, uid: u32) -> Vec<(u64, Client)> {
     out.lines()
         .filter_map(|l| {
             let mut f = l.split('\t');
             let activity: u64 = f.next()?.parse().ok()?;
             let tty = f.next()?.to_string();
             let width = f.next()?.parse().ok()?;
-            Some((activity, Client { tty, width }))
+            let theirs: u32 = f.next()?.parse().ok()?;
+            let readonly = f.next()? == "1";
+            (theirs == uid && !readonly).then_some((activity, Client { tty, width }))
         })
         .collect()
 }
@@ -274,6 +283,18 @@ mod tests {
         assert!(popup_main(&dir).is_err());
         assert!(!dir.exists(), "{} left behind", dir.display());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn only_our_own_writable_clients() {
+        let out = "5\t/dev/pts/1\t80\t1000\t0\n\
+                   9\t/dev/pts/2\t90\t1001\t0\n\
+                   8\t/dev/pts/3\t100\t1000\t1\n\
+                   7\t/dev/pts/4\t110\t\t\n\
+                   6\t/dev/pts/5\t120\t1000\t0\n";
+        let ttys: Vec<_> = our_clients(out, 1000).into_iter().map(|(a, c)| (a, c.tty, c.width)).collect();
+        assert_eq!(ttys, [(5, "/dev/pts/1".into(), 80), (6, "/dev/pts/5".into(), 120)]);
+        assert!(our_clients(out, 1002).is_empty());
     }
 
     #[test]
