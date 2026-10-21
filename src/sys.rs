@@ -225,11 +225,13 @@ pub fn protect_memory() {
     }
 }
 
-/// Keeps the pages holding `bytes` out of swap, if allowed. They're never
-/// unlocked: a page may hold more than one secret, and we don't live long.
-pub fn lock(bytes: &[u8]) {
-    if !bytes.is_empty() {
-        unsafe { libc::mlock(bytes.as_ptr().cast(), bytes.len()) };
+/// Keeps the pages holding the `len` bytes at `ptr` out of swap, if
+/// allowed. By pointer, as the bytes may not be initialised yet. They're
+/// never unlocked: a page may hold more than one secret, and we don't live
+/// long.
+pub fn lock(ptr: *const u8, len: usize) {
+    if len > 0 {
+        unsafe { libc::mlock(ptr.cast(), len) };
     }
 }
 

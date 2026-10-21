@@ -93,7 +93,7 @@ impl Secret {
 impl From<Vec<u8>> for Secret {
     /// Takes `v` over, locking the whole of its allocation.
     fn from(v: Vec<u8>) -> Secret {
-        sys::lock(unsafe { std::slice::from_raw_parts(v.as_ptr(), v.capacity()) });
+        sys::lock(v.as_ptr(), v.capacity());
         Secret(v)
     }
 }
