@@ -310,6 +310,25 @@ mod tests {
         fs::write(&big, format!("Created: 1\n{}Token: X\n", "Comment: x\n".repeat(10_000))).unwrap();
         assert_eq!(read_token(&big), None, "stops at MAX_KEY_FILE");
         assert_eq!(read_token(&dir.join("missing.key")), None);
+        // Through a fifo whose writer stays open after the head: reading any
+        // further than the head would wait on it.
+        let heads = [
+            ("stub", "Created: 1\nKey: (shadowed-private-key (rsa (n #00D5#)))\nToken: D276000124010000000630774964 X\n", Some("D276000124010000000630774964")),
+            ("real", "Created: 1\nKey: (protected-private-key (rsa (n #00", None),
+        ];
+        for (name, head, want) in heads {
+            let fifo = dir.join(format!("{name}-fifo.key"));
+            sys::mkfifo(&fifo).unwrap();
+            let writer = fifo.clone();
+            std::thread::spawn(move || {
+                let mut w = File::options().write(true).open(writer).unwrap();
+                std::io::Write::write_all(&mut w, head.as_bytes()).unwrap();
+                std::thread::sleep(Duration::from_secs(5));
+            });
+            let start = Instant::now();
+            assert_eq!(read_token(&fifo).as_deref(), want, "{name}");
+            assert!(start.elapsed() < Duration::from_secs(2), "{name}: read past the head");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
