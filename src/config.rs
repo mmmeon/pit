@@ -17,7 +17,8 @@
 //! the user and their passphrase.
 
 use std::env;
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -70,9 +71,14 @@ impl Config {
     /// `gui.pinentry` name programs to run as us, so they're taken only
     /// from a file that's ours and that no one else can write.
     fn read(path: &Path) -> Config {
-        let Ok(text) = fs::read_to_string(path) else { return Config::default() };
+        let Ok(mut file) = File::open(path) else { return Config::default() };
+        let mut text = String::new();
+        if file.read_to_string(&mut text).is_err() {
+            return Config::default();
+        }
         let mut c = Config::parse(&text);
-        let ours = fs::metadata(path).is_ok_and(|m| m.uid() == sys::uid() && m.mode() & 0o022 == 0);
+        // Of the file read, not whatever is at the path by now.
+        let ours = file.metadata().is_ok_and(|m| m.uid() == sys::uid() && m.mode() & 0o022 == 0);
         if !ours {
             c.hook = None;
             c.gui = None;
@@ -261,6 +267,8 @@ impl Drop for Hook {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     fn kv(k: &str, v: &str) -> (String, String) {
