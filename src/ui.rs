@@ -1,6 +1,5 @@
 //! The prompt itself: what gets asked, how it's laid out, and the key loop.
 
-use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -70,7 +69,23 @@ pub struct Secret(pub Vec<u8>);
 
 impl Secret {
     pub fn new() -> Secret {
-        Secret(Vec::with_capacity(512))
+        Secret::with_capacity(512)
+    }
+
+    pub fn with_capacity(n: usize) -> Secret {
+        Secret(Vec::with_capacity(n))
+    }
+
+    /// Appends `bytes`. Growing moves to a bigger buffer and zeroes the old
+    /// one, where Vec would leave a copy behind.
+    pub fn extend(&mut self, bytes: &[u8]) {
+        let need = self.0.len() + bytes.len();
+        if need > self.0.capacity() {
+            let mut bigger = Secret::with_capacity(need.max(2 * self.0.capacity()));
+            bigger.0.extend_from_slice(&self.0);
+            mem::swap(self, &mut bigger);
+        }
+        self.0.extend_from_slice(bytes);
     }
 }
 
@@ -185,7 +200,12 @@ pub enum Outcome {
 
 impl Outcome {
     pub fn encode(&self) -> Secret {
-        let mut s = Secret::new();
+        let len = match self {
+            Outcome::Pin { pin, .. } => pin.0.len(),
+            _ => 0,
+        };
+        // Room for every byte escaped, so it never grows.
+        let mut s = Secret::with_capacity(3 * len + 16);
         match self {
             Outcome::Pin { pin, repeated } => {
                 s.0.extend_from_slice(if *repeated { b"PIN 1 " } else { b"PIN 0 " });
@@ -497,12 +517,14 @@ enum Key {
 struct Ui<'a> {
     tty: &'a File,
     ctl: Option<&'a File>,
+    interrupts: Option<&'a sys::Interrupts>,
     req: &'a Request,
     lay: Layout,
     inline: bool,
     /// Cursor row, for relative movement when drawing inline.
     row: usize,
-    pending: VecDeque<u8>,
+    /// Keys read but not yet handled: some of the passphrase.
+    pending: Secret,
     pin: Secret,
     /// The first entry while asking to repeat it.
     first: Option<Secret>,
@@ -512,17 +534,21 @@ struct Ui<'a> {
 
 /// Shows the prompt on `tty` and waits for an answer. `inline` draws in place
 /// on an ordinary terminal instead of filling a popup. The prompt gives up if
-/// `ctl` hangs up, which means the wrapper has gone away.
+/// `ctl` hangs up, which means the wrapper has gone away, or, inline, when
+/// we're interrupted.
 pub fn run(tty: &File, req: &Request, ctl: Option<&File>, inline: bool) -> io::Result<Outcome> {
+    // Before raw mode, so it's never left behind; dropped after it.
+    let interrupts = inline.then(sys::Interrupts::catch).transpose()?;
     let _raw = sys::RawMode::enable(tty.as_raw_fd())?;
     let mut ui = Ui {
         tty,
         ctl,
+        interrupts: interrupts.as_ref(),
         req,
         lay: layout(req, req.width),
         inline,
         row: 0,
-        pending: VecDeque::new(),
+        pending: Secret::with_capacity(64),
         pin: Secret::new(),
         first: None,
         error: req.error.clone(),
@@ -655,8 +681,9 @@ impl Ui<'_> {
     fn fill(&mut self, timeout: Option<Duration>) -> io::Result<Option<Key>> {
         let mut fds = vec![self.tty.as_raw_fd()];
         fds.extend(self.ctl.map(|c| c.as_raw_fd()));
+        fds.extend(self.interrupts.map(|i| i.fd()));
         let revents = sys::poll(&fds, timeout)?;
-        if revents.get(1).is_some_and(|&r| r != 0) || revents[0] & (libc::POLLHUP | libc::POLLERR) != 0 {
+        if revents[1..].iter().any(|&r| r != 0) || revents[0] & (libc::POLLHUP | libc::POLLERR) != 0 {
             return Ok(Some(Key::Hangup));
         }
         if revents[0] == 0 {
@@ -674,14 +701,20 @@ impl Ui<'_> {
 
     /// Whether more input is waiting, giving it a moment to arrive.
     fn more(&mut self) -> io::Result<bool> {
-        if self.pending.is_empty() {
+        if self.pending.0.is_empty() {
             self.fill(Some(ESC_WAIT))?;
         }
-        Ok(!self.pending.is_empty())
+        Ok(!self.pending.0.is_empty())
+    }
+
+    /// The next key byte read. Shifting the rest down leaves no copy behind
+    /// but in the spare capacity, which is zeroed with the rest.
+    fn next(&mut self) -> Option<u8> {
+        (!self.pending.0.is_empty()).then(|| self.pending.0.remove(0))
     }
 
     fn key(&mut self, deadline: Option<Instant>) -> io::Result<Key> {
-        while self.pending.is_empty() {
+        while self.pending.0.is_empty() {
             let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
             if left == Some(Duration::ZERO) {
                 return Ok(Key::Timeout);
@@ -690,7 +723,7 @@ impl Ui<'_> {
                 return Ok(key);
             }
         }
-        let b = self.pending.pop_front().unwrap();
+        let b = self.next().unwrap();
         Ok(match b {
             b'\r' | b'\n' => Key::Enter,
             0x7f | 0x08 => Key::Backspace,
@@ -700,15 +733,15 @@ impl Ui<'_> {
             0x1b if !self.more()? => Key::Cancel,
             0x1b => {
                 // An escape sequence (arrow keys and such): skip it.
-                match self.pending.pop_front() {
+                match self.next() {
                     Some(b'[') => {
                         while self.more()? {
-                            if (0x40..=0x7e).contains(&self.pending.pop_front().unwrap()) {
+                            if (0x40..=0x7e).contains(&self.next().unwrap()) {
                                 break;
                             }
                         }
                     }
-                    Some(b'O') if self.more()? => drop(self.pending.pop_front()),
+                    Some(b'O') if self.more()? => drop(self.next()),
                     _ => {}
                 }
                 Key::Ignore
@@ -721,9 +754,11 @@ impl Ui<'_> {
                     0xf0..=0xf7 => 4,
                     _ => 1,
                 };
-                let mut text = vec![b];
+                // Never grows: a regrown Vec leaves its old buffer behind.
+                let mut text = Vec::with_capacity(4);
+                text.push(b);
                 while text.len() < len && self.more()? {
-                    text.push(self.pending.pop_front().unwrap());
+                    text.push(self.next().unwrap());
                 }
                 Key::Text(text)
             }
@@ -744,7 +779,7 @@ impl Ui<'_> {
         loop {
             match self.key(deadline)? {
                 Key::Text(mut text) => {
-                    self.pin.0.extend_from_slice(&text);
+                    self.pin.extend(&text);
                     text.fill(0);
                     self.reroll_marker();
                 }

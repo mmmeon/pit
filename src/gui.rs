@@ -150,7 +150,7 @@ impl Pinentry {
             }
             let mut chunk = [0; 256];
             let n = self.stdout.read(&mut chunk)?;
-            self.buf.0.extend_from_slice(&chunk[..n]);
+            self.buf.extend(&chunk[..n]);
             chunk.fill(0);
             if n == 0 {
                 return Ok(None);
@@ -175,7 +175,7 @@ impl Pinentry {
                 return Ok(Some(Reply { data, repeated, result: Err(code.unwrap_or(0) & 0xffff) }));
             }
             if let Some(d) = r.strip_prefix(b"D ") {
-                data.0.extend_from_slice(&Secret(unescape(d)).0);
+                data.extend(&Secret(unescape(d)).0);
             } else if r == b"S PIN_REPEATED" {
                 repeated = true;
             }

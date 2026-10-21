@@ -26,8 +26,10 @@ const ERR_ASS_PARAMETER: u32 = 280;
 /// Appends `data` with `%`, CR, LF and other control bytes percent-escaped.
 pub fn escape_into(out: &mut Vec<u8>, data: &[u8]) {
     for &b in data {
+        // No format!: its String would leave the byte behind when freed.
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
         if b == b'%' || b < 0x20 {
-            out.extend_from_slice(format!("%{b:02X}").as_bytes());
+            out.extend_from_slice(&[b'%', HEX[usize::from(b >> 4)], HEX[usize::from(b & 0xf)]]);
         } else {
             out.push(b);
         }
@@ -314,8 +316,8 @@ fn fail(code: u32, msg: &str) -> Result<(), Failure> {
 }
 
 fn data(out: &mut impl Write, value: &[u8]) -> io::Result<()> {
-    // Assuan lines max out at 1000 bytes.
-    let mut line = Secret::new();
+    // Assuan lines max out at 1000 bytes; room for one, so it never grows.
+    let mut line = Secret::with_capacity(1000);
     for &b in value {
         if line.0.len() > 990 {
             line.0.push(b'\n');
@@ -422,7 +424,7 @@ fn handle(st: &mut State, cmd: &str, arg: &str, out: &mut impl Write) -> io::Res
                 "flavor" => "tmux".to_string(),
                 "version" => env!("CARGO_PKG_VERSION").to_string(),
                 "pid" => process::id().to_string(),
-                "ttyinfo" => format!("{} {} -", dash(&st.ttyname), dash(&st.ttytype)),
+                "ttyinfo" => format!("{} {} {}", dash(&st.ttyname), dash(&st.ttytype), dash(&st.display)),
                 _ => return Ok(fail(ERR_ASS_PARAMETER, "IPC parameter error")),
             };
             data(out, value.as_bytes())?;
@@ -639,6 +641,8 @@ mod tests {
         ok(&mut st, "OPTION ttyname=/dev/pts/1");
         ok(&mut st, "OPTION ttytype=xterm");
         assert_eq!(run(&mut st, "GETINFO ttyinfo"), ("D /dev/pts/1 xterm -\n".into(), Ok(())));
+        ok(&mut st, "OPTION display=:0");
+        assert_eq!(run(&mut st, "GETINFO ttyinfo"), ("D /dev/pts/1 xterm :0\n".into(), Ok(())));
         let (out, res) = run(&mut st, "GETINFO bogus");
         assert_eq!(out, "");
         assert_eq!(res.unwrap_err().0, ERR_ASS_PARAMETER);

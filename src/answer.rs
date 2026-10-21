@@ -94,7 +94,7 @@ fn serve(mut stream: UnixStream, req: &Request, deadline: Option<Instant>) -> io
     loop {
         match stream.read(&mut chunk) {
             Ok(0) | Err(_) => return Ok(None),
-            Ok(n) => buf.0.extend_from_slice(&chunk[..n]),
+            Ok(n) => buf.extend(&chunk[..n]),
         }
         chunk.fill(0);
         if buf.0.ends_with(b"\n") {

@@ -175,7 +175,7 @@ fn popup(client: &Client, req: &Request, lay: &Layout, hook_cmd: Option<&str>, d
         if exited || readable {
             let mut chunk = [0; 256];
             while let Ok(n @ 1..) = resp.read(&mut chunk) {
-                buf.0.extend_from_slice(&chunk[..n]);
+                buf.extend(&chunk[..n]);
             }
             chunk.fill(0);
         }

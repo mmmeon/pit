@@ -6,6 +6,7 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 fn cstr(path: &Path) -> io::Result<CString> {
@@ -179,6 +180,67 @@ pub fn ignore_interrupts() {
     unsafe {
         libc::signal(libc::SIGINT, libc::SIG_IGN);
         libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+    }
+}
+
+/// Keeps the passphrase out of core dumps, and other processes of ours
+/// (a debugger) from reading our memory. Reset on exec, so the programs we
+/// run are unaffected.
+pub fn no_dumps() {
+    unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) };
+}
+
+const CAUGHT: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+static INTERRUPT_FD: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn on_interrupt(_: libc::c_int) {
+    let fd = INTERRUPT_FD.load(Ordering::Relaxed);
+    if fd >= 0 {
+        unsafe { libc::write(fd, [0u8].as_ptr().cast(), 1) };
+    }
+}
+
+/// Turns SIGINT, SIGTERM and SIGHUP into a readable pipe until dropped.
+/// gpg-agent cancels a pinentry with SIGINT, e.g. when the command that
+/// asked goes away; caught, the prompt can still put the terminal back.
+pub struct Interrupts {
+    read: OwnedFd,
+    _write: OwnedFd,
+    old: [libc::sigaction; CAUGHT.len()],
+}
+
+impl Interrupts {
+    pub fn catch() -> io::Result<Interrupts> {
+        let mut fds = [0; 2];
+        check(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) })?;
+        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        INTERRUPT_FD.store(write.as_raw_fd(), Ordering::Relaxed);
+        let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
+        sa.sa_sigaction = on_interrupt as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        // Reads and writes carry on; poll returns, and sees the pipe.
+        sa.sa_flags = libc::SA_RESTART;
+        let mut old: [libc::sigaction; CAUGHT.len()] = unsafe { std::mem::zeroed() };
+        for (&sig, old) in CAUGHT.iter().zip(&mut old) {
+            unsafe {
+                libc::sigemptyset(&mut sa.sa_mask);
+                libc::sigaction(sig, &sa, old);
+            }
+        }
+        Ok(Interrupts { read, _write: write, old })
+    }
+
+    /// Readable once one of the signals has arrived.
+    pub fn fd(&self) -> RawFd {
+        self.read.as_raw_fd()
+    }
+}
+
+impl Drop for Interrupts {
+    fn drop(&mut self) {
+        for (&sig, old) in CAUGHT.iter().zip(&self.old) {
+            unsafe { libc::sigaction(sig, old, std::ptr::null_mut()) };
+        }
+        INTERRUPT_FD.store(-1, Ordering::Relaxed);
     }
 }
 

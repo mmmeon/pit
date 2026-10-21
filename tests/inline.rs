@@ -335,3 +335,25 @@ fn unknown_client_behind_a_proxy_is_not_asked_and_says_why() {
     assert!(reply[0].contains("proxy in front of gpg-agent"), "{reply:?}");
     assert!(!pty.text().contains("PIN:"));
 }
+
+#[test]
+fn interrupted_by_the_agent_puts_the_terminal_back() {
+    let (_sb, pty, mut p) = setup();
+    let modes = pty.modes();
+    p.start("GETPIN");
+    pty.wait_text("PIN:");
+    pty.send("hunt");
+    // gpg-agent cancels with SIGINT, e.g. when the command that asked goes.
+    assert_eq!(unsafe { libc::kill(p.pid() as i32, libc::SIGINT) }, 0);
+    assert_eq!(err_code(&p.finish()), Some(ERR_CANCELED));
+    let screen = pty.wait_gone("PIN:");
+    assert_eq!(screen.contents().trim_end(), "$ gpg --sign file");
+    assert!(!screen.hide_cursor());
+    assert_eq!(pty.modes(), modes);
+
+    // And it still serves the next prompt.
+    p.start("GETPIN");
+    pty.wait_text("PIN:");
+    pty.send("hunter2\r");
+    assert_eq!(p.finish(), ["D hunter2", "OK"]);
+}
