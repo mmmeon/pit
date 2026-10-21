@@ -249,14 +249,19 @@ impl State {
             tty = open(t).ok().filter(free);
         }
 
+        // Why there was no popup, when setting one up failed: the places
+        // below may still do, and the error says so if none does.
+        let mut no_popup = None;
         if tty.is_none()
             && let Some(client) = tmux::find_client()
         {
             req.style = cfg.style;
             let lay = ui::layout(&req, client.width.saturating_sub(4));
             req.width = lay.width;
-            if let Some(outcome) = tmux::prompt(&client, &req, &lay, cfg.hook.as_deref())? {
-                return Ok(Ok(outcome));
+            match tmux::prompt(&client, &req, &lay, cfg.hook.as_deref()) {
+                Ok(Some(outcome)) => return Ok(Ok(outcome)),
+                Ok(None) => {}
+                Err(e) => no_popup = Some(e),
             }
         }
 
@@ -297,6 +302,9 @@ impl State {
         let tty = match tty {
             Ok(tty) => tty,
             Err(mut why) => {
+                if let Some(e) = no_popup {
+                    why = format!("the popup couldn't be set up ({e}); {why}");
+                }
                 if !tried_gui && gui.is_some() {
                     if let Some(outcome) = hand_off(&req) {
                         return Ok(Ok(outcome));

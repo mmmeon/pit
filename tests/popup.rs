@@ -248,6 +248,32 @@ fn falls_back_to_pane_when_popup_cannot_open() {
 }
 
 #[test]
+fn falls_back_to_pane_when_popup_cannot_be_set_up() {
+    require_tmux!();
+    let sb = Sandbox::new();
+    let tmux = Tmux::start(&sb);
+    let _client = tmux.attach(30, 100);
+    // Nowhere for the popup's files: the runtime dir can't be made.
+    let not_a_dir = sb.tmp().join("file");
+    std::fs::write(&not_a_dir, "").unwrap();
+    let run = not_a_dir.to_str().unwrap();
+    let pane = tmux.run(&["new-window", "-P", "-F", "#{pane_tty}", "exec sleep 999 </dev/null"]).trim().to_string();
+    let mut p = Pinentry::spawn_env(&sb, &["--ttyname", &pane], &[("XDG_RUNTIME_DIR", run)]);
+    p.start("GETPIN");
+    wait_until("prompt in pane", || tmux.capture().contains("PIN:").then_some(()), || tmux.capture());
+    tmux.send_keys(&["-l", "s3cret"]);
+    tmux.send_keys(&["Enter"]);
+    assert_eq!(p.finish(), ["D s3cret", "OK"]);
+    // With the pane off limits too, the error says what went wrong first.
+    sb.config("[tmux]\ninline = \"never\"\n");
+    let mut p = Pinentry::spawn_env(&sb, &["--ttyname", &pane], &[("XDG_RUNTIME_DIR", run)]);
+    p.start("GETPIN");
+    let reply = p.finish();
+    assert_eq!(err_code(&reply), Some(ERR_NO_PIN_ENTRY), "{reply:?}");
+    assert!(reply[0].contains("the popup couldn't be set up (") && reply[0].contains("inline prompts are off"), "{reply:?}");
+}
+
+#[test]
 fn closing_popup_cancels() {
     require_tmux!();
     let sb = Sandbox::new();
