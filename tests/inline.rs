@@ -91,6 +91,20 @@ fn escape_sequences_are_ignored() {
 }
 
 #[test]
+fn control_characters_in_the_text_do_not_reach_the_terminal() {
+    // A remote client sets the key description; it mustn't redraw the
+    // prompt over the note that says so, or have the terminal answer.
+    let (_sb, pty, mut p) = setup();
+    p.setup(&["SETDESC Note: Request from a remote site.%0AReal%1B[2K%1B[1Gspoofed%1B[>q%1B]11;?%07", "SETPROMPT P%07IN:"]);
+    p.start("GETPIN");
+    let screen = pty.wait_text("PIN:");
+    let text = screen.contents();
+    assert!(text.contains("Note: Request from a remote site.") && text.contains("Real[2K[1Gspoofed[>q]11;?"), "{text}");
+    pty.send("x\r");
+    assert_eq!(p.finish(), ["D x", "OK"]);
+}
+
+#[test]
 fn lone_escape_and_ctrl_c_cancel() {
     for key in [ESC, "\x03"] {
         let (_sb, pty, mut p) = setup();

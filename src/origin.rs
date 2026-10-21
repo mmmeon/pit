@@ -303,12 +303,7 @@ fn command(args: &[String], full: bool) -> Option<String> {
     };
     let rest: Vec<&String> = if full { rest.iter().collect() } else { rest.first().filter(sub).into_iter().collect() };
     let line = std::iter::once(name).chain(rest.into_iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
-    Some(cut(&clean(&line), MAX_CMD))
-}
-
-/// Without control characters, which would draw on the terminal.
-pub fn clean(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).collect()
+    Some(cut(&ui::clean(&line, false), MAX_CMD))
 }
 
 /// `s` in at most `max` columns, cut with an ellipsis.

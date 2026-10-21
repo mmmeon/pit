@@ -237,6 +237,14 @@ impl Outcome {
     }
 }
 
+/// `s` without what would do more than show: control characters, which
+/// draw on the terminal, and bidi overrides, which reorder what's shown.
+/// Newlines stay if `lines`, for text that has its own.
+pub fn clean(s: &str, lines: bool) -> String {
+    const BIDI: [std::ops::RangeInclusive<char>; 3] = ['\u{200e}'..='\u{200f}', '\u{202a}'..='\u{202e}', '\u{2066}'..='\u{2069}'];
+    s.chars().filter(|&c| (lines && c == '\n') || !(c.is_control() || BIDI.iter().any(|r| r.contains(&c)))).collect()
+}
+
 pub fn width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }

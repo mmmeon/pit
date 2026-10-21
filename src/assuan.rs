@@ -62,8 +62,12 @@ pub fn unescape(s: impl AsRef<[u8]>) -> Vec<u8> {
     out
 }
 
+/// An argument's text, as it may be shown. The agent's clients have a say
+/// in it (a remote one sets the key description itself, an ssh client the
+/// key's comment), so it gets nothing that could redraw the prompt or make
+/// the terminal answer.
 fn text(arg: &str) -> String {
-    String::from_utf8_lossy(&unescape(arg)).into_owned()
+    ui::clean(&String::from_utf8_lossy(&unescape(arg)), true)
 }
 
 /// What gpg-agent has told us so far.
@@ -592,6 +596,17 @@ mod tests {
         assert_eq!(st.notok.as_deref(), Some("_Never"));
         assert_eq!(st.repeat_error.as_deref(), Some("mismatch"));
         assert_eq!(st.timeout, 30);
+    }
+
+    #[test]
+    fn shown_text_keeps_no_control_characters() {
+        let mut st = State::default();
+        ok(&mut st, "SETDESC Note: remote.%0A%1B[2K%1B[1Gspoofed%09x%C2%9B2J%E2%80%AEy");
+        assert_eq!(st.desc.as_deref(), Some("Note: remote.\n[2K[1Gspoofedx2Jy"));
+        ok(&mut st, "SETPROMPT PIN%07:");
+        assert_eq!(st.prompt.as_deref(), Some("PIN:"));
+        ok(&mut st, "OPTION default-ok=_O%1BK");
+        assert_eq!(st.default_ok.as_deref(), Some("_OK"));
     }
 
     #[test]
