@@ -104,11 +104,11 @@ impl<'a> Desk<'a> {
         tmux.run(&["rename-window", "zsh"]);
         // No hostname or clock in the screenshots.
         tmux.set("status-right", "");
-        // perl renames itself, standing in for git; sleep is the requester.
-        let out = tmux.run(&[
-            "new-window", "-t", "work:2", "-n", "git", "-P", "-F", "#{pane_pid}",
-            "perl -e '$0 = \"git commit -S\"; system(\"sleep\", 999)'; :",
-        ]);
+        // perl standing in for git, run as `git commit -S` with its script
+        // in a file named commit; sleep is the requester.
+        std::fs::write(sb.tmp().join("commit"), "system('sleep', 999)").unwrap();
+        let fake = format!("cd {} && perl -e 'exec {{\"perl\"}} qw(git commit -S)'; :", sb.tmp().display());
+        let out = tmux.run(&["new-window", "-t", "work:2", "-n", "git", "-P", "-F", "#{pane_pid}", &fake]);
         let shell: u32 = out.trim().parse().unwrap();
         let comm = |p: u32| std::fs::read_to_string(format!("/proc/{p}/comm")).unwrap_or_default();
         let pid = wait_until("sleep", || descendants(shell).into_iter().find(|&p| comm(p).trim() == "sleep"), String::new);

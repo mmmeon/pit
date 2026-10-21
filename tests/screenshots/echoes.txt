@@ -1,19 +1,19 @@
 --- echo marker
-┌─ gpg · git commit -S @ work:2.0 ─┐
+┌─ gpg · git commit @ work:2.0 ────┐
 │ Unlock "User <user@example.org>" │
 │                                  │
 │ Passphrase: [•·•·]               │
 └──────────────────────────────────┘
 
 --- echo dots
-┌─ gpg · git commit -S @ work:2.0 ─┐
+┌─ gpg · git commit @ work:2.0 ────┐
 │ Unlock "User <user@example.org>" │
 │                                  │
 │ Passphrase: •••••••              │
 └──────────────────────────────────┘
 
 --- echo none
-┌─ gpg · git commit -S @ work:2.0 ─┐
+┌─ gpg · git commit @ work:2.0 ────┐
 │ Unlock "User <user@example.org>" │
 │                                  │
 │ Passphrase:                      │

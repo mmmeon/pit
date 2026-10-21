@@ -344,8 +344,11 @@ fn command(args: &[String], full: bool) -> Option<String> {
     let (argv0, rest) = args.split_first()?;
     // A daemon may retitle itself ("sshd: user@pts/3"): only its first word
     // is a path, and what follows (that it's a login session from
-    // elsewhere) is worth keeping.
+    // elsewhere) is worth keeping. Only after a colon, as daemons write it:
+    // a program that copies its whole command line into argv[0] (Python's
+    // setproctitle, Node's process.title) would show its arguments too.
     let (prog, title) = argv0.split_once(char::is_whitespace).unwrap_or((argv0, ""));
+    let title = if full || prog.ends_with(':') { title } else { "" };
     let prog = prog.rsplit('/').next().unwrap_or(prog);
     let name = if title.is_empty() { prog.to_string() } else { format!("{prog} {title}") };
     let name = name.as_str();
@@ -450,6 +453,10 @@ Num       RefCount Protocol Flags    Type St Inode Path
         // elsewhere, kept whole.
         assert_eq!(c(&["sshd: user@pts/3"], false).as_deref(), Some("sshd: user@pts/3"));
         assert_eq!(c(&["/usr/lib/ssh/sshd-session: user@notty"], false).as_deref(), Some("sshd-session: user@notty"));
+        // Not a whole command line put in argv[0], unless asked for.
+        assert_eq!(c(&["python3 app.py --token abc"], false).as_deref(), Some("python3"));
+        assert_eq!(c(&["node server.js --password pw", "x"], false).as_deref(), Some("node"));
+        assert_eq!(c(&["python3 app.py --token abc"], true).as_deref(), Some("python3 app.py --token abc"));
     }
 
     #[test]

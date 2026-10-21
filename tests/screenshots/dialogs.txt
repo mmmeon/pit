@@ -1,5 +1,5 @@
 --- wrong passphrase
-┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+┌─ gpg · git commit @ work:2.0 ─────────────────────────────────┐
 │ Please enter the passphrase to unlock the OpenPGP secret key: │
 │ "User <user@example.org>"                                     │
 │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
@@ -10,7 +10,7 @@
 └───────────────────────────────────────────────────────────────┘
 
 --- new passphrase, repeat
-┌─ gpg · git commit -S @ work:2.0 ─────────────────┐
+┌─ gpg · git commit @ work:2.0 ────────────────────┐
 │ Please enter a passphrase to protect the new key │
 │                                                  │
 │                                                  │
@@ -18,7 +18,7 @@
 └──────────────────────────────────────────────────┘
 
 --- new passphrase, mismatch
-┌─ gpg · git commit -S @ work:2.0 ─────────────────┐
+┌─ gpg · git commit @ work:2.0 ────────────────────┐
 │ Please enter a passphrase to protect the new key │
 │                                                  │
 │ does not match - try again                       │
@@ -26,7 +26,7 @@
 └──────────────────────────────────────────────────┘
 
 --- confirm
-┌─ gpg · git commit -S @ work:2.0 ───────────────────┐
+┌─ gpg · git commit @ work:2.0 ──────────────────────┐
 │ An ssh process requested the use of key            │
 │ SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE │
 │ (user@laptop)                                      │
@@ -36,7 +36,7 @@
 └────────────────────────────────────────────────────┘
 
 --- message
-┌─ gpg · git commit -S @ work:2.0 ─────────┐
+┌─ gpg · git commit @ work:2.0 ────────────┐
 │ No card found. Insert your OpenPGP card. │
 │                                          │
 │ ⏎ OK                                     │

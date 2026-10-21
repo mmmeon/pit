@@ -2,7 +2,7 @@ pit: gpg-agent pinentry for terminals and tmux
 
   bar (default), along the bottom of the client:
 
-    ┌─ gpg · git commit -S @ work:2.0 ─────────────────────────────────────┐
+    ┌─ gpg · git commit @ work:2.0 ────────────────────────────────────────┐
     │ Please enter the passphrase to unlock the OpenPGP secret key         │
     │ "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2   │
     │ created 2024-03-01.                                                  │
@@ -12,7 +12,7 @@ pit: gpg-agent pinentry for terminals and tmux
 
   box, centred:
 
-    ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+    ┌─ gpg · git commit @ work:2.0 ─────────────────────────────────┐
     │ Please enter the passphrase to unlock the OpenPGP secret key: │
     │ "User <user@example.org>"                                     │
     │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
@@ -30,7 +30,7 @@ pit: gpg-agent pinentry for terminals and tmux
 
   wrong passphrase:
 
-    ┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+    ┌─ gpg · git commit @ work:2.0 ─────────────────────────────────┐
     │ Please enter the passphrase to unlock the OpenPGP secret key: │
     │ "User <user@example.org>"                                     │
     │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
@@ -42,7 +42,7 @@ pit: gpg-agent pinentry for terminals and tmux
 
   new passphrase, after a mismatch:
 
-    ┌─ gpg · git commit -S @ work:2.0 ─────────────────┐
+    ┌─ gpg · git commit @ work:2.0 ────────────────────┐
     │ Please enter a passphrase to protect the new key │
     │                                                  │
     │ does not match - try again                       │
@@ -51,7 +51,7 @@ pit: gpg-agent pinentry for terminals and tmux
 
   confirm:
 
-    ┌─ gpg · git commit -S @ work:2.0 ───────────────────┐
+    ┌─ gpg · git commit @ work:2.0 ──────────────────────┐
     │ An ssh process requested the use of key            │
     │ SHA256:Xg5lV0wHqR6c8eZ9o1C3pJ2bDkF4aT7nYyLmQsUvWiE │
     │ (user@laptop)                                      │
@@ -62,7 +62,7 @@ pit: gpg-agent pinentry for terminals and tmux
 
   message:
 
-    ┌─ gpg · git commit -S @ work:2.0 ─────────┐
+    ┌─ gpg · git commit @ work:2.0 ────────────┐
     │ No card found. Insert your OpenPGP card. │
     │                                          │
     │ ⏎ OK                                     │
@@ -79,7 +79,7 @@ pit: gpg-agent pinentry for terminals and tmux
   pit answer, in any terminal, for a prompt left waiting:
 
     ~ $ pit answer
-     gpg · git commit -S @ work:2.0
+     gpg · git commit @ work:2.0
      Please enter the passphrase to unlock the OpenPGP secret key
      "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2
      created 2024-03-01.

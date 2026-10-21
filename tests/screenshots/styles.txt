@@ -1,5 +1,5 @@
 --- style bar
-┌─ gpg · git commit -S @ work:2.0 ─────────────────────────────────────┐
+┌─ gpg · git commit @ work:2.0 ────────────────────────────────────────┐
 │ Please enter the passphrase to unlock the OpenPGP secret key         │
 │ "User <user@example.org>" · 255-bit EDDSA key, ID 3AA5C34371567BD2   │
 │ created 2024-03-01.                                                  │
@@ -8,7 +8,7 @@
 [work] 0:zsh- 2:git*
 
 --- style box
-┌─ gpg · git commit -S @ work:2.0 ──────────────────────────────┐
+┌─ gpg · git commit @ work:2.0 ─────────────────────────────────┐
 │ Please enter the passphrase to unlock the OpenPGP secret key: │
 │ "User <user@example.org>"                                     │
 │ 255-bit EDDSA key, ID 3AA5C34371567BD2,                       │
