@@ -132,6 +132,7 @@ config
     origin = "short"    # short, full
     hook = '<command>'  # see below
     pending = "never"   # never, wait
+    show = "origin intro identity key created"
 
     [tmux]
     style = "bar"       # bar, box, line
@@ -147,6 +148,14 @@ config
   origin: short names the program, and its subcommand for those known to
   have one ("git commit"); full gives the whole command line, which may
   hold secrets and puts them on screen.
+
+  show: the parts of a prompt shown, by default all of them: origin in the
+  title, and from gpg's description the intro ("Please enter the
+  passphrase..."), the quoted user ID, the key's length, algorithm and ID,
+  and when it was created. Names are separated by spaces or commas, e.g.
+  show = "identity key"; "" shows none of them. gpg-agent's note on a
+  remote request is always shown, and so is any text that isn't one of
+  these. Without origin, the hook's PIT_ORIGIN is empty too.
 
   inline: auto asks in place in a pane when the command that asked is in
   its foreground and nothing full-screen shows there; never always uses

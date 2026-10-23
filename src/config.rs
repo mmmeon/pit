@@ -5,6 +5,7 @@
 //!   origin = "short"      # short|full, the command named in the title
 //!   hook = '<command>'    # run on a prompt opening and closing
 //!   pending = "never"     # never|wait, for `pit answer` when there's nowhere to ask
+//!   show = "origin intro identity key created"  # the parts of a prompt shown
 //!   [tmux]
 //!   style = "bar"         # bar|box|line, for the popup
 //!   inline = "auto"       # auto|never, asking in a pane in place
@@ -41,6 +42,40 @@ pub struct Config {
     pub gui_first: bool,
     /// Whether a prompt with nowhere to go waits for `pit answer`.
     pub pending: bool,
+    pub show: Show,
+}
+
+/// The parts of a prompt shown. The rest of a description, which pit can't
+/// tell apart, is always shown, and so is gpg-agent's note on a request
+/// from a remote site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Show {
+    /// Who asked, in the title.
+    pub origin: bool,
+    /// gpg's line before the user ID ("Please enter the passphrase...").
+    pub intro: bool,
+    /// The quoted user ID.
+    pub identity: bool,
+    /// The key's length, algorithm and ID ("255-bit EDDSA key, ID ...").
+    pub key: bool,
+    /// When the key was created.
+    pub created: bool,
+}
+
+impl Default for Show {
+    fn default() -> Show {
+        Show { origin: true, intro: true, identity: true, key: true, created: true }
+    }
+}
+
+impl Show {
+    /// Only the parts named in `s`, separated by spaces or commas. Unknown
+    /// names are skipped.
+    fn parse(s: &str) -> Show {
+        let names: Vec<&str> = s.split([' ', '\t', ',']).filter(|n| !n.is_empty()).collect();
+        let has = |n: &str| names.contains(&n);
+        Show { origin: has("origin"), intro: has("intro"), identity: has("identity"), key: has("key"), created: has("created") }
+    }
 }
 
 impl Default for Config {
@@ -54,6 +89,7 @@ impl Default for Config {
             gui: None,
             gui_first: false,
             pending: false,
+            show: Show::default(),
         }
     }
 }
@@ -108,6 +144,7 @@ impl Config {
                     "never" => c.pending = false,
                     _ => {}
                 },
+                "show" => c.show = Show::parse(&v),
                 "gui.pinentry" => c.gui = Some(v).filter(|v| !v.trim().is_empty()),
                 "gui.order" => match v.as_str() {
                     "first" => c.gui_first = true,
@@ -333,6 +370,15 @@ mod tests {
         assert_eq!(values(r#"a = "q\"b\\s\n\U0001F600""#), [kv("a", "q\"b\\s\n😀")]);
         assert_eq!(values(r"a = 'C:\no\escape'"), [kv("a", r"C:\no\escape")]);
         assert_eq!(values(r#"a = "\u12""#), [] as [(String, String); 0]);
+    }
+
+    #[test]
+    fn show() {
+        assert_eq!(Config::parse("").show, Show::default());
+        let c = Config::parse("show = \"identity, key  bogus\"\n");
+        assert_eq!(c.show, Show { origin: false, intro: false, identity: true, key: true, created: false });
+        let none = Show { origin: false, intro: false, identity: false, key: false, created: false };
+        assert_eq!(Config::parse("show = \"\"").show, none);
     }
 
     #[test]

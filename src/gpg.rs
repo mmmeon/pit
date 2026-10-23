@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::config::Show;
 use crate::ui::{self, Secret};
 use crate::{origin, sys};
 
@@ -240,6 +241,71 @@ pub fn add_name(desc: &str, name: &str) -> String {
     lines.join("\n")
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    Note,
+    Intro,
+    Identity,
+    Key,
+    Created,
+    Other,
+}
+
+fn words(l: &str) -> impl Iterator<Item = &str> {
+    l.split(|c: char| c.is_whitespace() || "(),.;".contains(c)).filter(|w| !w.is_empty())
+}
+
+/// A YYYY-MM-DD date, as gpg writes them in any language.
+fn date(w: &str) -> bool {
+    let b = w.as_bytes();
+    b.len() == 10 && b[4] == b'-' && b[7] == b'-' && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+/// What each line of `desc` is. Told apart by their shape, which holds in
+/// any language: the user ID is quoted, the key line names a 16-digit ID,
+/// the created line has a date, and the intro is what comes before the user
+/// ID. gpg-agent's note is ahead of a blank line.
+fn parts(desc: &str) -> Vec<(Part, &str)> {
+    let lines: Vec<&str> = desc.lines().collect();
+    // The note, if any: up to the first blank line, with more after it.
+    let body = match lines.iter().position(|l| l.trim().is_empty()) {
+        Some(i) if lines[..i].iter().any(|l| !l.trim().is_empty()) && lines[i..].iter().any(|l| !l.trim().is_empty()) => i,
+        _ => 0,
+    };
+    let identity = lines[body..].iter().position(|l| l.trim().starts_with('"')).map(|i| i + body);
+    let part = |i: usize, t: &str| {
+        if i < body {
+            Part::Note
+        } else if t.is_empty() {
+            Part::Other
+        } else if Some(i) == identity {
+            Part::Identity
+        } else if identity.is_some_and(|id| i < id) {
+            Part::Intro
+        } else if words(t).any(date) {
+            Part::Created
+        } else if words(t).any(|w| w.len() == 16 && w.bytes().all(|b| b.is_ascii_hexdigit())) {
+            Part::Key
+        } else {
+            Part::Other
+        }
+    };
+    lines.iter().enumerate().map(|(i, l)| (part(i, l.trim()), *l)).collect()
+}
+
+/// `desc` without the parts of gpg's description `show` leaves out.
+/// gpg-agent's note, and anything not one of these parts, stays.
+pub fn trim_desc(desc: &str, show: &Show) -> String {
+    let kept = parts(desc).into_iter().filter(|&(part, _)| match part {
+        Part::Note | Part::Other => true,
+        Part::Intro => show.intro,
+        Part::Identity => show.identity,
+        Part::Key => show.key,
+        Part::Created => show.created,
+    });
+    kept.map(|(_, l)| l).collect::<Vec<_>>().join("\n")
+}
+
 fn is_fingerprint(s: &str) -> bool {
     let hex = |s: &str| s.len() >= 16 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b':');
     !s.contains(char::is_whitespace)
@@ -249,6 +315,26 @@ fn is_fingerprint(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trims_desc() {
+        let desc = "Please enter the passphrase to unlock the OpenPGP secret key:\n\"User <a@x>\"\n255-bit EDDSA key, ID 3AA5C34371567BD2,\ncreated 2024-03-01.\n";
+        let all = Show::default();
+        let only = |f: fn(&mut Show)| {
+            let mut s = Show { origin: false, intro: false, identity: false, key: false, created: false };
+            f(&mut s);
+            trim_desc(desc, &s)
+        };
+        assert_eq!(trim_desc(desc, &all), desc.trim_end());
+        assert_eq!(only(|s| s.intro = true), "Please enter the passphrase to unlock the OpenPGP secret key:");
+        assert_eq!(only(|s| s.identity = true), "\"User <a@x>\"");
+        assert_eq!(only(|s| s.key = true), "255-bit EDDSA key, ID 3AA5C34371567BD2,");
+        assert_eq!(only(|s| s.created = true), "created 2024-03-01.");
+        // gpg-agent's note on a remote request, and what isn't known, stay.
+        let remote = format!("Note: Request from a remote site.\n\n{desc}");
+        assert_eq!(trim_desc(&remote, &Show { identity: false, ..all }).lines().next(), Some("Note: Request from a remote site."));
+        assert_eq!(trim_desc("No card found.", &Show { intro: false, ..all }), "No card found.");
+    }
 
     #[test]
     fn picks_primary_user_id() {

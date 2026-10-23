@@ -168,6 +168,29 @@ fn styles() {
 }
 
 #[test]
+fn parts() {
+    require_tmux!();
+    let mut shots = Shots::new("parts");
+    let configs = [
+        "show = \"identity key\"",
+    ];
+    for config in configs {
+        let sb = Sandbox::new();
+        let d = Desk::new(&sb);
+        sb.config(&format!("{config}\n[tmux]\nstyle = \"box\""));
+        let mut p = d.pinentry();
+        p.setup(&[DESC, "SETPROMPT Passphrase:"]);
+        p.start("GETPIN");
+        d.client.pty.wait_text("Passphrase:");
+        d.client.pty.send("hunter2");
+        shots.add(&config.replace('\n', " · "), &popup(&typed(&d.client.pty), false));
+        d.client.pty.send("\x1b");
+        p.finish();
+    }
+    shots.check();
+}
+
+#[test]
 fn echoes() {
     require_tmux!();
     let mut shots = Shots::new("echoes");

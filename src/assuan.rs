@@ -176,6 +176,7 @@ impl State {
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }
+        req.desc = gpg::trim_desc(&req.desc, &cfg.show);
         let owner = self.requester();
         let mut tried_gui = false;
         // The popup can land far from the command that asked; say which.
@@ -195,6 +196,7 @@ impl State {
                 .and_then(|t| origin::find_tty(&t).label()),
             (None, _) => None,
         }
+        .filter(|_| cfg.show.origin)
         .unwrap_or_default();
         // Like pinentry: the error and repeat prompt apply to one dialog only.
         self.error = None;

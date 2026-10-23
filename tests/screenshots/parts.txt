@@ -1,0 +1,8 @@
+--- show = "identity key"
+┌─ gpg ───────────────────────────────────┐
+│ "User <user@example.org>"               │
+│ 255-bit EDDSA key, ID 3AA5C34371567BD2, │
+│                                         │
+│ Passphrase: [•·•·]                      │
+└─────────────────────────────────────────┘
+
