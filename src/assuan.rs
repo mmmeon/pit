@@ -176,7 +176,7 @@ impl State {
         {
             req.desc = gpg::add_name(&req.desc, &name);
         }
-        req.desc = gpg::trim_desc(&req.desc, &cfg.show);
+        req.desc = gpg::trim_desc(&req.desc, &cfg.show, cfg.intro.as_deref());
         let owner = self.requester();
         let mut tried_gui = false;
         // The popup can land far from the command that asked; say which.

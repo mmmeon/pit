@@ -133,6 +133,7 @@ config
     hook = '<command>'  # see below
     pending = "never"   # never, wait
     show = "origin intro identity key created"
+    intro = '<text>'    # gpg's by default
 
     [tmux]
     style = "bar"       # bar, box, line
@@ -156,6 +157,14 @@ config
   show = "identity key"; "" shows none of them. gpg-agent's note on a
   remote request is always shown, and so is any text that isn't one of
   these. Without origin, the hook's PIT_ORIGIN is empty too.
+
+  intro: shown in place of gpg's intro, for every prompt that has one
+  (unlock, import, export alike): the text before a quoted user ID, so a
+  prompt without one keeps gpg's. {identity}, {key} and {created} stand
+  for those parts, {date} for the created date alone; any other {name}
+  stays as written. Pair it with show to not repeat them, e.g.
+    intro = "Unlock {identity}"
+    show = "origin intro key"
 
   inline: auto asks in place in a pane when the command that asked is in
   its foreground and nothing full-screen shows there; never always uses

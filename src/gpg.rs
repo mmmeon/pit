@@ -293,17 +293,40 @@ fn parts(desc: &str) -> Vec<(Part, &str)> {
     lines.iter().enumerate().map(|(i, l)| (part(i, l.trim()), *l)).collect()
 }
 
-/// `desc` without the parts of gpg's description `show` leaves out.
-/// gpg-agent's note, and anything not one of these parts, stays.
-pub fn trim_desc(desc: &str, show: &Show) -> String {
-    let kept = parts(desc).into_iter().filter(|&(part, _)| match part {
-        Part::Note | Part::Other => true,
-        Part::Intro => show.intro,
-        Part::Identity => show.identity,
-        Part::Key => show.key,
-        Part::Created => show.created,
-    });
-    kept.map(|(_, l)| l).collect::<Vec<_>>().join("\n")
+/// `desc` without the parts of gpg's description `show` leaves out, and
+/// with its intro replaced by `intro`, if given, where {identity}, {key}
+/// and {created} stand for those parts, and {date} for the created date. gpg-agent's note, and anything not
+/// one of these parts, stays.
+pub fn trim_desc(desc: &str, show: &Show, intro: Option<&str>) -> String {
+    let parts = parts(desc);
+    let of = |p: Part| parts.iter().find(|(q, _)| *q == p).map_or("", |(_, l)| l.trim());
+    let mut out: Vec<String> = Vec::new();
+    let mut intro_done = false;
+    for &(part, line) in &parts {
+        let shown = match part {
+            Part::Note | Part::Other => true,
+            Part::Intro => show.intro,
+            Part::Identity => show.identity,
+            Part::Key => show.key,
+            Part::Created => show.created,
+        };
+        match (part, intro) {
+            _ if !shown => {}
+            (Part::Intro, Some(t)) => {
+                if !intro_done {
+                    out.push(
+                        t.replace("{identity}", of(Part::Identity).trim_matches('"'))
+                            .replace("{key}", of(Part::Key).trim_end_matches(','))
+                            .replace("{created}", of(Part::Created).trim_end_matches('.'))
+                            .replace("{date}", words(of(Part::Created)).find(|w| date(w)).unwrap_or("")),
+                    );
+                    intro_done = true;
+                }
+            }
+            _ => out.push(line.to_string()),
+        }
+    }
+    out.join("\n")
 }
 
 fn is_fingerprint(s: &str) -> bool {
@@ -323,17 +346,32 @@ mod tests {
         let only = |f: fn(&mut Show)| {
             let mut s = Show { origin: false, intro: false, identity: false, key: false, created: false };
             f(&mut s);
-            trim_desc(desc, &s)
+            trim_desc(desc, &s, None)
         };
-        assert_eq!(trim_desc(desc, &all), desc.trim_end());
+        assert_eq!(trim_desc(desc, &all, None), desc.trim_end());
         assert_eq!(only(|s| s.intro = true), "Please enter the passphrase to unlock the OpenPGP secret key:");
         assert_eq!(only(|s| s.identity = true), "\"User <a@x>\"");
         assert_eq!(only(|s| s.key = true), "255-bit EDDSA key, ID 3AA5C34371567BD2,");
         assert_eq!(only(|s| s.created = true), "created 2024-03-01.");
         // gpg-agent's note on a remote request, and what isn't known, stay.
         let remote = format!("Note: Request from a remote site.\n\n{desc}");
-        assert_eq!(trim_desc(&remote, &Show { identity: false, ..all }).lines().next(), Some("Note: Request from a remote site."));
-        assert_eq!(trim_desc("No card found.", &Show { intro: false, ..all }), "No card found.");
+        assert_eq!(trim_desc(&remote, &Show { identity: false, ..all }, None).lines().next(), Some("Note: Request from a remote site."));
+        assert_eq!(trim_desc("No card found.", &Show { intro: false, ..all }, None), "No card found.");
+    }
+
+    #[test]
+    fn replaces_intro() {
+        let desc = "Please enter the passphrase to unlock\nthe OpenPGP secret key:\n\"User <a@x>\"\n255-bit EDDSA key, ID 3AA5C34371567BD2,\ncreated 2024-03-01.";
+        let show = Show { identity: false, key: false, created: false, ..Show::default() };
+        let t = "Unlock {identity} ({key}, {created}) {other}";
+        assert_eq!(
+            trim_desc(desc, &show, Some(t)),
+            "Unlock User <a@x> (255-bit EDDSA key, ID 3AA5C34371567BD2, created 2024-03-01) {other}"
+        );
+        assert_eq!(trim_desc(desc, &Show { intro: false, ..show }, Some(t)), "");
+        assert_eq!(trim_desc(desc, &show, Some("Unlock (Created {date})")), "Unlock (Created 2024-03-01)");
+        // No user ID, no intro to replace.
+        assert_eq!(trim_desc("Enter the PIN", &show, Some("x")), "Enter the PIN");
     }
 
     #[test]

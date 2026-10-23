@@ -1,3 +1,19 @@
+--- intro = "Unlock {identity}" · show = "origin intro key created"
+┌─ gpg · git commit @ work:2.0 ───────────┐
+│ Unlock User <user@example.org>          │
+│ 255-bit EDDSA key, ID 3AA5C34371567BD2, │
+│ created 2024-03-01.                     │
+│                                         │
+│ Passphrase: [•·•·]                      │
+└─────────────────────────────────────────┘
+
+--- intro = "Unlock {identity} (Created {date})" · show = "intro"
+┌─ gpg ───────────────────────────────────────────────┐
+│ Unlock User <user@example.org> (Created 2024-03-01) │
+│                                                     │
+│ Passphrase: [•·•·]                                  │
+└─────────────────────────────────────────────────────┘
+
 --- show = "identity key"
 ┌─ gpg ───────────────────────────────────┐
 │ "User <user@example.org>"               │

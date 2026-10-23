@@ -172,6 +172,8 @@ fn parts() {
     require_tmux!();
     let mut shots = Shots::new("parts");
     let configs = [
+        "intro = \"Unlock {identity}\"\nshow = \"origin intro key created\"",
+        "intro = \"Unlock {identity} (Created {date})\"\nshow = \"intro\"",
         "show = \"identity key\"",
     ];
     for config in configs {

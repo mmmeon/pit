@@ -6,6 +6,7 @@
 //!   hook = '<command>'    # run on a prompt opening and closing
 //!   pending = "never"     # never|wait, for `pit answer` when there's nowhere to ask
 //!   show = "origin intro identity key created"  # the parts of a prompt shown
+//!   intro = "<text>"      # in place of gpg's intro, with {identity} {key} {created} {date}
 //!   [tmux]
 //!   style = "bar"         # bar|box|line, for the popup
 //!   inline = "auto"       # auto|never, asking in a pane in place
@@ -43,6 +44,8 @@ pub struct Config {
     /// Whether a prompt with nowhere to go waits for `pit answer`.
     pub pending: bool,
     pub show: Show,
+    /// Text in place of gpg's intro, with placeholders for the other parts.
+    pub intro: Option<String>,
 }
 
 /// The parts of a prompt shown. The rest of a description, which pit can't
@@ -90,6 +93,7 @@ impl Default for Config {
             gui_first: false,
             pending: false,
             show: Show::default(),
+            intro: None,
         }
     }
 }
@@ -145,6 +149,7 @@ impl Config {
                     _ => {}
                 },
                 "show" => c.show = Show::parse(&v),
+                "intro" => c.intro = Some(v).filter(|v| !v.trim().is_empty()),
                 "gui.pinentry" => c.gui = Some(v).filter(|v| !v.trim().is_empty()),
                 "gui.order" => match v.as_str() {
                     "first" => c.gui_first = true,
@@ -379,6 +384,8 @@ mod tests {
         assert_eq!(c.show, Show { origin: false, intro: false, identity: true, key: true, created: false });
         let none = Show { origin: false, intro: false, identity: false, key: false, created: false };
         assert_eq!(Config::parse("show = \"\"").show, none);
+        assert_eq!(Config::parse("intro = 'Unlock {identity}'").intro.as_deref(), Some("Unlock {identity}"));
+        assert_eq!(Config::parse("intro = ' '").intro, None);
     }
 
     #[test]
